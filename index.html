@@ -281,6 +281,7 @@
     let markerIndex = {};
     let meldungenVisible = false, lastMeldungenCount = 0;
     const accessCache = {}; // stopId -> HTML der Barrierefreiheits-Infos (OSM)
+    let routeActive = false; // true, solange eine A→B-Route hervorgehoben wird
 
     // ---------- Hilfsfunktionen ----------
     function buildUrl(endpoint, params) {
@@ -478,6 +479,7 @@
 
     // ---------- Karte: Marker ----------
     function refreshMarkers() {
+      if (routeActive) return; // während einer hervorgehobenen Route keine Haltestellen nachladen
       const zoom = map.getZoom();
       if (zoom < 13) {
         markersLayer.clearLayers();
@@ -634,6 +636,7 @@
       showPanel("stop");
       expandSheet();
       secondsLeft = REFRESH_SECONDS;
+      loadAccessibility(stop);   // Bahnsteig-Punkte sofort anzeigen, unabhängig vom Tab
       await loadStopDepartures();
     }
     async function loadStopDepartures() {
@@ -655,8 +658,7 @@
           : `<p class="muted">Keine aktuellen Störungen oder Baustellen an dieser Haltestelle.</p>`;
         const stoerTab = document.querySelector('.subtab[data-sub="stoer"]');
         if (stoerTab) stoerTab.textContent = stopInfos.length ? `Meldungen (${stopInfos.length})` : "Meldungen";
-        // Barrierefreiheit wird beim Öffnen des Tabs „Barrierefrei" geladen (OpenStreetMap).
-        document.getElementById("stopAccess").innerHTML = `<p class="muted">Tab „Barrierefrei" öffnen, um die Daten aus OpenStreetMap zu laden.</p>`;
+        // Barrierefreiheit wird bereits in openStop() geladen – hier nichts überschreiben.
         // Marker rot färben, wenn Meldungen vorliegen
         if (stopInfos.length && markerIndex[currentStop.id]) markerIndex[currentStop.id].setStyle({ fillColor: MARK_ALERT, radius: 8 });
         lastUpdate = new Date(); lastCount = events.length;
@@ -682,6 +684,11 @@
     }
     function drawJourney(journey) {
       routeLayer.clearLayers();
+      // Netzlinien und Haltestellenpunkte ausblenden, damit nur die Route sichtbar ist.
+      routeActive = true;
+      if (map.hasLayer(linesLayer)) map.removeLayer(linesLayer);
+      if (map.hasLayer(markersLayer)) map.removeLayer(markersLayer);
+      accessLayer.clearLayers();
       const all = [];
       (journey.legs || []).forEach(leg => {
         const pts = getLegCoords(leg);
@@ -807,7 +814,14 @@
       document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t.dataset.mode === mode));
       document.getElementById("mapControls").style.display = mode === "map" ? "flex" : "none";
       document.getElementById("tripControls").style.display = mode === "trip" ? "flex" : "none";
-      if (mode === "map") routeLayer.clearLayers();
+      if (mode === "map") {
+        // Route verwerfen und das Liniennetz wieder einblenden.
+        routeLayer.clearLayers();
+        routeActive = false;
+        if (!map.hasLayer(markersLayer)) markersLayer.addTo(map);
+        if (linesShown && !map.hasLayer(linesLayer)) linesLayer.addTo(map);
+        refreshMarkers();
+      }
       showPanel(mode === "trip" ? "trip" : (currentStop ? "stop" : "list"));
       measureSheet(); applySheet(false);
     }
