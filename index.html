@@ -227,6 +227,15 @@
     .stop-node { width: 9px; height: 9px; border-radius: 50%; border: 2px solid var(--surface); }
     .switch-note { font-size: 10.5px; color: var(--text-dim); padding: 0 8px 7px 49px; margin-top: -5px; line-height: 1.4; }
 
+    /* Fahrzeuge (berechnete Position) */
+    .veh { display: grid; place-items: center; font-size: 10.5px; font-weight: 800; border-radius: 50%; border: 2px solid #0a0f1a; box-shadow: 0 2px 8px rgba(0,0,0,.6); transition: transform .25s linear; }
+    .veh-wrap { transition: none; }
+    .live-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); margin-right: 6px; animation: pulse 1.6s ease-in-out infinite; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .25; } }
+    .live-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin: 12px 0; }
+    .live-txt { font-size: 12.5px; }
+    .live-note { font-size: 10.5px; color: var(--text-dim); margin-top: 3px; }
+
     /* Routen-Auswahl per Klick */
     .pick-box { background: var(--surface-2); border: 1px dashed var(--line); border-radius: var(--r-md); padding: 12px; margin-bottom: 12px; }
     .pick-step { display: flex; align-items: center; gap: 9px; padding: 5px 0; font-size: 13px; }
@@ -330,6 +339,13 @@
             <h2 style="margin:0;">Linienverlauf</h2>
             <div id="lineStatus" class="muted"></div>
           </div>
+        </div>
+        <div class="live-bar">
+          <div>
+            <div class="live-txt" id="liveTxt">Fahrzeuge auf der Strecke</div>
+            <div class="live-note">Berechnete Position aus Echtzeit-Abfahrten – kein GPS.</div>
+          </div>
+          <button id="liveBtn" class="btn btn-quiet btn-sm">Live starten</button>
         </div>
         <div class="divider"></div>
         <div id="lineStops"></div>
@@ -697,7 +713,11 @@
 
     // ---------- Linien-Ansicht: alle Haltestellen einer Linie isoliert ----------
     function openLine(line) {
-      const stops = lineStopsIndex[line] || [];
+      stopLive();
+      veh.line = line;
+      const allStops = lineStopsIndex[line] || [];
+      const inKA = allStops.filter(st => st.k);
+      const stops = inKA.length >= 2 ? inKA : allStops;   // Anzeige: nur Karlsruher Abschnitt
       const s = lineStyle(line);
       mapMode = "line";
       applyMapLayers();
@@ -744,7 +764,120 @@
         map.fitBounds(L.latLngBounds(all), { paddingTopLeft: [40, 70], paddingBottomRight: [40, visible + 20] });
       }
     }
+    // ---------- Fahrzeuge: berechnete Live-Position ----------
+    // Grundlage: Linienverlauf + Fahrzeiten aus GTFS, kombiniert mit Echtzeit-Abfahrten der EFA.
+    // Das ist keine GPS-Ortung, sondern eine Hochrechnung – in der Oberfläche entsprechend benannt.
+    const vehicleLayer = L.layerGroup().addTo(map);
+    const veh = { line: null, dirs: null, list: [], anim: null, poll: null, running: false };
+
+    function normName(s) { return norm(s || "").replace(/\s+/g, " "); }
+    // Baut je Fahrtrichtung eine nach Zeit sortierte Stützpunktliste.
+    function buildDirections(stops) {
+      const total = stops[stops.length - 1].t || 1;
+      return {
+        1: stops.map(s => ({ t: s.t, c: s.c })),
+        [-1]: stops.slice().reverse().map(s => ({ t: total - s.t, c: s.c })),
+        total,
+        first: stops[0].n, last: stops[stops.length - 1].n
+      };
+    }
+    function posAt(points, elapsed) {
+      if (elapsed <= points[0].t) return points[0].c;
+      for (let i = 0; i < points.length - 1; i++) {
+        const a = points[i], b = points[i + 1];
+        if (elapsed >= a.t && elapsed <= b.t) {
+          const span = (b.t - a.t) || 1, f = (elapsed - a.t) / span;
+          return [a.c[0] + (b.c[0] - a.c[0]) * f, a.c[1] + (b.c[1] - a.c[1]) * f];
+        }
+      }
+      return points[points.length - 1].c;
+    }
+    // Ermittelt aus Abfahrten an mehreren Halten, welche Fahrzeuge gerade unterwegs sind.
+    async function fetchVehicles(line, stops) {
+      const idx = [0.15, 0.45, 0.75].map(f => Math.floor(stops.length * f))
+        .filter((v, i, a) => a.indexOf(v) === i && stops[v] && stops[v].i);
+      const dirs = veh.dirs;
+      const found = new Map();
+      const results = await Promise.allSettled(idx.map(k => getDepartureData(stops[k].i).then(d => ({ k, d }))));
+      results.forEach(r => {
+        if (r.status !== "fulfilled") return;
+        const { k, d } = r.value;
+        (d.stopEvents || []).forEach(ev => {
+          if ((ev.transportation?.number || "") !== line) return;
+          const t = ev.departureTimeEstimated || ev.departureTimePlanned;
+          if (!t) return;
+          const dest = normName(ev.transportation?.destination?.name);
+          // Richtung anhand des Fahrtziels bestimmen
+          const toLast = normName(dirs.last), toFirst = normName(dirs.first);
+          let dir = 0;
+          if (dest && (dest.includes(toLast) || toLast.includes(dest))) dir = 1;
+          else if (dest && (dest.includes(toFirst) || toFirst.includes(dest))) dir = -1;
+          if (!dir) return;                      // unklare Richtung überspringen
+          const cum = dir === 1 ? stops[k].t : (dirs.total - stops[k].t);
+          const start = new Date(t).getTime() - cum * 1000;
+          const key = dir + ":" + Math.round(start / 60000);
+          if (!found.has(key)) found.set(key, { dir, start, dest: ev.transportation?.destination?.name || "" });
+        });
+      });
+      return [...found.values()];
+    }
+    function renderVehicles() {
+      if (!veh.running || !veh.dirs) return;
+      const now = Date.now();
+      const s = lineStyle(veh.line);
+      const active = veh.list.filter(v => {
+        const el = (now - v.start) / 1000;
+        return el >= 0 && el <= veh.dirs.total;
+      });
+      vehicleLayer.clearLayers();
+      active.forEach(v => {
+        const el = (now - v.start) / 1000;
+        const c = posAt(veh.dirs[v.dir], el);
+        const icon = L.divIcon({
+          className: "veh-wrap",
+          html: `<div class="veh" style="width:24px;height:24px;background:${s.bg};color:${s.fg};">${veh.line}</div>`,
+          iconSize: [24, 24], iconAnchor: [12, 12]
+        });
+        L.marker(c, { icon, interactive: true })
+          .addTo(vehicleLayer)
+          .bindTooltip(`Linie ${veh.line} → ${v.dest}`, { direction: "top" });
+      });
+      document.getElementById("liveTxt").innerHTML =
+        `<span class="live-dot"></span>${active.length} Fahrzeug(e) unterwegs`;
+    }
+    async function refreshVehicles() {
+      if (!veh.running) return;
+      try {
+        const stops = lineStopsIndex[veh.line] || [];
+        veh.list = await fetchVehicles(veh.line, stops);
+        renderVehicles();
+      } catch (e) { console.warn("Fahrzeuge konnten nicht geladen werden:", e); }
+    }
+    async function startLive() {
+      const stops = lineStopsIndex[veh.line] || [];
+      if (stops.length < 2) return;
+      veh.dirs = buildDirections(stops);
+      veh.running = true;
+      document.getElementById("liveBtn").textContent = "Live stoppen";
+      document.getElementById("liveTxt").innerHTML = `<span class="spinner"></span>Suche Fahrzeuge …`;
+      await refreshVehicles();
+      clearInterval(veh.anim); clearInterval(veh.poll);
+      veh.anim = setInterval(renderVehicles, 1000);      // Position fortschreiben
+      veh.poll = setInterval(refreshVehicles, 45000);    // Abfahrten neu holen
+    }
+    function stopLive() {
+      veh.running = false;
+      clearInterval(veh.anim); clearInterval(veh.poll);
+      veh.anim = veh.poll = null;
+      vehicleLayer.clearLayers();
+      const t = document.getElementById("liveTxt");
+      if (t) t.textContent = "Fahrzeuge auf der Strecke";
+      const b = document.getElementById("liveBtn");
+      if (b) b.textContent = "Live starten";
+    }
+
     function closeLine() {
+      stopLive();
       lineFocusLayer.clearLayers(); lineStopsLayer.clearLayers();
       mapMode = "browse"; applyMapLayers(); refreshMarkers();
       showPanel(currentStop ? "stop" : "list");
@@ -1136,10 +1269,12 @@
       document.getElementById("mapControls").style.display = mode === "map" ? "flex" : "none";
       document.getElementById("tripControls").style.display = mode === "trip" ? "block" : "none";
       if (mode === "map") {
+        stopLive();
         routeLayer.clearLayers(); pickLayer.clearLayers();
         lineFocusLayer.clearLayers(); lineStopsLayer.clearLayers();
         mapMode = "browse"; applyMapLayers(); refreshMarkers();
       } else {
+        stopLive();
         lineFocusLayer.clearLayers(); lineStopsLayer.clearLayers();
         mapMode = "pick"; applyMapLayers(); refreshMarkers();
         if (!document.getElementById("tripStatus").textContent)
@@ -1201,6 +1336,7 @@
     document.getElementById("pickReset").addEventListener("click", resetPick);
     document.getElementById("backToList").addEventListener("click", () => { currentStop = null; accessLayer.clearLayers(); showPanel("list"); });
     document.getElementById("backFromLine").addEventListener("click", closeLine);
+    document.getElementById("liveBtn").addEventListener("click", () => { veh.running ? stopLive() : startLive(); });
     document.getElementById("toggleMeldungen").addEventListener("click", () => {
       meldungenVisible = !meldungenVisible;
       document.getElementById("networkDisruptions").style.display = meldungenVisible ? "block" : "none";
