@@ -423,7 +423,7 @@
           style: f => ({ color: f.properties.color, weight: 4, opacity: 1, lineJoin: "round", lineCap: "round" }),
           onEachFeature: (f, l) => {
             l.bindTooltip("Linie " + f.properties.line + " – antippen für alle Haltestellen", { sticky: true });
-            l.on("click", (e) => { L.DomEvent.stopPropagation(e); openLine(f.properties.line); });
+            l.on("click", (e) => { L.DomEvent.stopPropagation(e); openLine(f.properties.line, e.latlng); });
           }
         });
         linesLayer.addLayer(casing); linesLayer.addLayer(colored);
@@ -712,7 +712,7 @@
     }
 
     // ---------- Linien-Ansicht: alle Haltestellen einer Linie isoliert ----------
-    function openLine(line) {
+    function openLine(line, clickLatLng) {
       stopLive();
       veh.line = line;
       const allStops = lineStopsIndex[line] || [];
@@ -761,7 +761,12 @@
       showPanel("line"); expandSheet();
       if (all.length) {
         const visible = sheet.getBoundingClientRect().height - currentOffset;
-        map.fitBounds(L.latLngBounds(all), { paddingTopLeft: [40, 70], paddingBottomRight: [40, visible + 20] });
+        const pad = { paddingTopLeft: [40, 70], paddingBottomRight: [40, visible + 20] };
+        const b = L.latLngBounds(all);
+        // Nicht zu weit herauszoomen: bei langen Linien lieber die angeklickte Stelle zeigen.
+        const fitZoom = map.getBoundsZoom(b, false, L.point(60, visible + 90));
+        if (fitZoom >= 12) map.fitBounds(b, pad);
+        else map.setView(clickLatLng || b.getCenter(), Math.max(13, Math.min(map.getZoom(), 15)));
       }
     }
     // ---------- Fahrzeuge: berechnete Live-Position ----------
@@ -793,32 +798,63 @@
       return points[points.length - 1].c;
     }
     // Ermittelt aus Abfahrten an mehreren Halten, welche Fahrzeuge gerade unterwegs sind.
+    // Sucht das Fahrtziel unter allen Halten der Linie – erkennt auch Kurzläufe
+    // (z. B. Linie 4 "bis Europaplatz") und Zielnamen, die nicht der Endhaltestelle entsprechen.
+    function destIndex(destName, stops) {
+      const d = normName(destName);
+      if (!d) return -1;
+      let best = -1, bestScore = 0;
+      stops.forEach((s, i) => {
+        const n = normName(s.n);
+        if (!n || n.length < 3) return;
+        let score = 0;
+        if (d === n) score = 3;
+        else if (d.includes(n)) score = 2;
+        else if (n.includes(d)) score = 1;
+        if (score > bestScore) { bestScore = score; best = i; }
+      });
+      return bestScore ? best : -1;
+    }
     async function fetchVehicles(line, stops) {
-      const idx = [0.15, 0.45, 0.75].map(f => Math.floor(stops.length * f))
+      // Mehrere Halte über die Linie verteilt abfragen, damit auch Fahrzeuge
+      // in der Streckenmitte erfasst werden.
+      const idx = [0.1, 0.3, 0.5, 0.7, 0.9]
+        .map(f => Math.min(stops.length - 1, Math.floor(stops.length * f)))
         .filter((v, i, a) => a.indexOf(v) === i && stops[v] && stops[v].i);
       const dirs = veh.dirs;
       const found = new Map();
       const results = await Promise.allSettled(idx.map(k => getDepartureData(stops[k].i).then(d => ({ k, d }))));
+      let seenEvents = 0;
       results.forEach(r => {
         if (r.status !== "fulfilled") return;
         const { k, d } = r.value;
         (d.stopEvents || []).forEach(ev => {
           if ((ev.transportation?.number || "") !== line) return;
+          seenEvents++;
           const t = ev.departureTimeEstimated || ev.departureTimePlanned;
           if (!t) return;
-          const dest = normName(ev.transportation?.destination?.name);
-          // Richtung anhand des Fahrtziels bestimmen
-          const toLast = normName(dirs.last), toFirst = normName(dirs.first);
+          const destName = ev.transportation?.destination?.name || "";
+          const di = destIndex(destName, stops);
           let dir = 0;
-          if (dest && (dest.includes(toLast) || toLast.includes(dest))) dir = 1;
-          else if (dest && (dest.includes(toFirst) || toFirst.includes(dest))) dir = -1;
-          if (!dir) return;                      // unklare Richtung überspringen
+          if (di > k) dir = 1;
+          else if (di >= 0 && di < k) dir = -1;
+          else {
+            // Ziel nicht auf der Linie gefunden: über die Endhalte versuchen
+            const dn = normName(destName), f = normName(dirs.first), l = normName(dirs.last);
+            if (l && (dn.includes(l) || l.includes(dn))) dir = 1;
+            else if (f && (dn.includes(f) || f.includes(dn))) dir = -1;
+          }
+          if (!dir) return;
           const cum = dir === 1 ? stops[k].t : (dirs.total - stops[k].t);
           const start = new Date(t).getTime() - cum * 1000;
+          // Fahrtende (auch bei Kurzläufen), damit Fahrzeuge am Ziel verschwinden
+          let endT = dirs.total;
+          if (di >= 0) endT = dir === 1 ? stops[di].t : (dirs.total - stops[di].t);
           const key = dir + ":" + Math.round(start / 60000);
-          if (!found.has(key)) found.set(key, { dir, start, dest: ev.transportation?.destination?.name || "" });
+          if (!found.has(key)) found.set(key, { dir, start, endT, dest: destName });
         });
       });
+      veh.lastSeen = seenEvents;
       return [...found.values()];
     }
     function renderVehicles() {
@@ -827,7 +863,7 @@
       const s = lineStyle(veh.line);
       const active = veh.list.filter(v => {
         const el = (now - v.start) / 1000;
-        return el >= 0 && el <= veh.dirs.total;
+        return el >= 0 && el <= (v.endT ?? veh.dirs.total);
       });
       vehicleLayer.clearLayers();
       active.forEach(v => {
@@ -842,8 +878,9 @@
           .addTo(vehicleLayer)
           .bindTooltip(`Linie ${veh.line} → ${v.dest}`, { direction: "top" });
       });
-      document.getElementById("liveTxt").innerHTML =
-        `<span class="live-dot"></span>${active.length} Fahrzeug(e) unterwegs`;
+      document.getElementById("liveTxt").innerHTML = active.length
+        ? `<span class="live-dot"></span>${active.length} Fahrzeug(e) unterwegs`
+        : (veh.lastSeen ? "Aktuell kein Fahrzeug auf dieser Strecke." : "Keine Abfahrten für diese Linie gefunden.");
     }
     async function refreshVehicles() {
       if (!veh.running) return;
