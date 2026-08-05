@@ -806,20 +806,53 @@
       });
       applyMapLayers();
     }
+    // --- Bahnsteig-Daten flächig laden (eine Abfrage pro Gebiet statt pro Haltestelle) ---
+    const OVERPASS_MIRRORS = [
+      "https://overpass.kumi.systems/api/interpreter",
+      "https://overpass-api.de/api/interpreter",
+      "https://overpass.private.coffee/api/interpreter"
+    ];
+    let osmPlatforms = [];        // alle bekannten Bahnsteig-Knoten
+    let osmAreas = [];            // bereits geladene Bereiche [s,w,n,e]
+    let osmPending = null;        // laufende Abfrage
+    function areaCovered(lat, lon) {
+      return osmAreas.some(a => lat >= a[0] && lat <= a[2] && lon >= a[1] && lon <= a[3]);
+    }
+    // Fragt mehrere Overpass-Server parallel an und nimmt die schnellste Antwort.
+    async function overpassRace(query) {
+      const body = "data=" + encodeURIComponent(query);
+      return await Promise.any(OVERPASS_MIRRORS.map(async url => {
+        const res = await fetch(url, { method: "POST", body });
+        if (!res.ok) throw new Error(url + " HTTP " + res.status);
+        return await res.json();
+      }));
+    }
+    async function ensureAreaPlatforms(lat, lon) {
+      if (areaCovered(lat, lon)) return;
+      if (osmPending) { try { await osmPending; } catch (_) {} if (areaCovered(lat, lon)) return; }
+      const d = 0.035; // ca. 4 km Kantenlänge
+      const bbox = [lat - d, lon - d * 1.5, lat + d, lon + d * 1.5];
+      const q = `[out:json][timeout:25];(node["public_transport"="platform"](${bbox.join(",")});node["railway"="tram_stop"](${bbox.join(",")});node["highway"="bus_stop"](${bbox.join(",")}););out;`;
+      osmPending = overpassRace(q).then(data => {
+        (data.elements || []).forEach(e => { if (e.tags && e.lat != null) osmPlatforms.push(e); });
+        osmAreas.push(bbox);
+      }).finally(() => { osmPending = null; });
+      await osmPending;
+    }
+    function platformsNear(lat, lon, meters) {
+      const dLat = meters / 111000, dLon = meters / (111000 * Math.cos(lat * Math.PI / 180));
+      return osmPlatforms.filter(e => Math.abs(e.lat - lat) <= dLat && Math.abs(e.lon - lon) <= dLon);
+    }
+
     async function loadAccessibility(stop) {
       const el = document.getElementById("stopAccess");
       if (accessCache[stop.id]) { el.innerHTML = accessCache[stop.id].html; drawAccessMarkers(accessCache[stop.id].markers); return; }
       const p = normalizeCoord(stop.coord);
       if (!p) { el.innerHTML = `<p class="muted">Keine Koordinaten für diese Haltestelle.</p>`; return; }
       el.innerHTML = `<p class="muted"><span class="spinner"></span>Lade Barrierefreiheit …</p>`;
-      const q = `[out:json][timeout:20];(node(around:90,${p[0]},${p[1]})["public_transport"~"platform|stop_position"];node(around:90,${p[0]},${p[1]})["railway"="tram_stop"];node(around:90,${p[0]},${p[1]})["highway"="bus_stop"];);out;`;
       try {
-        const res = await fetch("https://overpass-api.de/api/interpreter", { method: "POST", body: "data=" + encodeURIComponent(q) });
-        if (!res.ok) throw new Error("Overpass HTTP " + res.status);
-        const data = await res.json();
-        let plats = (data.elements || []).filter(e => e.tags && e.lat != null && e.lon != null &&
-          (e.tags.public_transport === "platform" || e.tags.railway === "tram_stop" || e.tags.highway === "bus_stop"));
-        if (!plats.length) plats = (data.elements || []).filter(e => e.tags && e.lat != null && e.lon != null);
+        await ensureAreaPlatforms(p[0], p[1]);
+        const plats = platformsNear(p[0], p[1], 90);
         if (!plats.length) { el.innerHTML = `<div class="empty"><span class="big">♿</span>Für diese Haltestelle sind in OpenStreetMap keine Bahnsteig-Daten hinterlegt.</div>`; return; }
         const lats = plats.map(e => e.lat), lons = plats.map(e => e.lon);
         const dlat = Math.max(...lats) - Math.min(...lats), dlon = Math.max(...lons) - Math.min(...lons);
@@ -1193,7 +1226,15 @@
     });
 
     let moveTimer = null;
-    map.on("moveend", () => { clearTimeout(moveTimer); moveTimer = setTimeout(refreshMarkers, 400); });
+    map.on("moveend", () => {
+      clearTimeout(moveTimer);
+      moveTimer = setTimeout(() => {
+        refreshMarkers();
+        // Bahnsteig-Daten für den sichtbaren Bereich im Hintergrund vorladen
+        const c = map.getCenter();
+        if (map.getZoom() >= 13) ensureAreaPlatforms(c.lat, c.lng).catch(() => {});
+      }, 400);
+    });
 
     // ---------- Timer ----------
     function tick() {
@@ -1216,6 +1257,7 @@
         console.error(err);
       }
       refreshMarkers();
+      ensureAreaPlatforms(KA_CENTER[0], KA_CENTER[1]).catch(() => {}); // Barrierefreiheit vorladen
       setInterval(tick, 1000);
     })();
   </script>
