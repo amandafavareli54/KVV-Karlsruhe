@@ -1,0 +1,902 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>KVV – Störungen & Baustellen Karlsruhe</title>
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+
+  <style>
+    :root {
+      --bg: #0b1220; --sheet: #0f172a; --card: #1e293b; --card2: #172033;
+      --text: #e5e7eb; --muted: #94a3b8; --border: #334155; --accent: #f43f5e; --accent-dark: #be123c;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; margin: 0; background: var(--bg); color: var(--text); overflow: hidden; }
+
+    /* Karte im Vollbild */
+    #map { position: fixed; inset: 0; z-index: 0; background: var(--bg); }
+
+    /* Titel-Pille oben links */
+    #topbar {
+      position: fixed; top: 12px; left: 12px; z-index: 1200;
+      background: rgba(15,23,42,0.9); color: #fff; padding: 8px 14px; border-radius: 999px;
+      font-weight: 600; font-size: 13px; letter-spacing: .2px; backdrop-filter: blur(8px);
+      border: 1px solid rgba(255,255,255,0.08); box-shadow: 0 4px 14px rgba(0,0,0,0.35);
+    }
+
+    /* Bottom Sheet */
+    #sheet {
+      position: fixed; left: 0; right: 0; bottom: 0; height: 74vh; z-index: 1100;
+      background: var(--sheet); color: var(--text);
+      border-radius: 22px 22px 0 0; box-shadow: 0 -12px 40px rgba(0,0,0,0.5);
+      display: flex; flex-direction: column; will-change: transform; touch-action: none;
+    }
+    @media (min-width: 900px) { #sheet { left: auto; right: 16px; width: 440px; border-radius: 22px; bottom: 16px; height: 82vh; } }
+
+    #handle { padding: 10px 0 6px; display: flex; justify-content: center; cursor: grab; flex: 0 0 auto; }
+    #handle:active { cursor: grabbing; }
+    .grabber { width: 44px; height: 5px; border-radius: 3px; background: #475569; }
+
+    #sheetHeader { padding: 2px 16px 12px; flex: 0 0 auto; border-bottom: 1px solid var(--border); }
+    #sheetBody { padding: 14px 16px 22px; overflow-y: auto; flex: 1 1 auto; }
+
+    .tabs { display: flex; gap: 8px; margin-bottom: 10px; }
+    .tab { flex: 1; padding: 9px 12px; border: 1px solid var(--border); background: var(--card2); color: #cbd5e1; border-radius: 10px; cursor: pointer; font-size: 14px; font-weight: 600; }
+    .tab.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+    .control-row { display: flex; gap: 8px; align-items: center; }
+    .field { position: relative; flex: 1; }
+    .field input { width: 100%; padding: 11px 12px; font-size: 15px; border: 1px solid var(--border); border-radius: 10px; background: var(--card2); color: var(--text); }
+    .field input::placeholder { color: var(--muted); }
+    .control-row button { padding: 11px 16px; font-size: 14px; font-weight: 600; border: none; border-radius: 10px; background: var(--accent); color: #fff; cursor: pointer; }
+    .control-row button:hover { background: var(--accent-dark); }
+
+    .suggestions { position: absolute; top: 100%; left: 0; right: 0; margin-top: 4px; background: var(--card); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,0.5); z-index: 1500; overflow: hidden; }
+    .suggestion { padding: 10px 12px; cursor: pointer; font-size: 14px; border-bottom: 1px solid var(--border); }
+    .suggestion:hover { background: var(--card2); }
+    .suggestion small { color: var(--muted); }
+
+    h2 { margin: 0 0 8px; font-size: 17px; font-weight: 700; }
+    .muted { font-size: 13px; color: var(--muted); margin-bottom: 12px; }
+    .backlink { display: inline-block; margin-bottom: 10px; font-size: 14px; color: var(--accent); cursor: pointer; }
+    .backlink:hover { text-decoration: underline; }
+
+    .disruption { background: #2a1c0c; border: 1px solid #92400e; border-left: 4px solid #f59e0b; border-radius: 10px; padding: 11px 13px; margin-bottom: 10px; font-size: 13px; }
+    .disruption .d-title { font-weight: 700; color: #fbbf24; }
+    .disruption .d-valid { color: #fcd34d; font-size: 12px; margin: 4px 0; }
+    .disruption .d-content { color: #d1d5db; margin-top: 5px; line-height: 1.45; }
+    .disruption a { color: #fca5a5; }
+
+    .departure { display: flex; align-items: center; gap: 12px; padding: 10px 2px; border-bottom: 1px solid var(--border); }
+    .line-badge { font-weight: bold; min-width: 42px; text-align: center; padding: 5px 7px; border-radius: 8px; font-size: 14px; }
+    .dest { flex: 1; font-size: 14px; color: var(--text); }
+    .time { font-variant-numeric: tabular-nums; font-weight: 600; font-size: 13px; }
+    .delay { color: #f87171; font-size: 12px; margin-left: 4px; }
+    .ontime { color: #4ade80; font-size: 12px; margin-left: 4px; }
+
+    .journey { border: 1px solid var(--border); border-radius: 12px; padding: 12px; margin-bottom: 12px; background: var(--card2); }
+    .journey-head { display: flex; justify-content: space-between; align-items: baseline; font-weight: 700; font-size: 15px; margin-bottom: 8px; }
+    .journey-sub { color: var(--muted); font-weight: 400; font-size: 12px; }
+    .leg { display: flex; gap: 10px; align-items: flex-start; padding: 7px 0; }
+    .leg.disrupted { border-left: 3px solid #ef4444; background: #3f1d1d; padding-left: 8px; border-radius: 6px; }
+    .leg-time { font-variant-numeric: tabular-nums; font-size: 13px; min-width: 44px; color: #cbd5e1; }
+    .leg-body { flex: 1; font-size: 13px; }
+    .leg-body .to { color: var(--muted); }
+    .walk-badge { background: var(--border); color: var(--text); border-radius: 8px; padding: 3px 8px; font-size: 12px; }
+
+    .ghost-btn { padding: 9px 14px; font-size: 14px; border: 1px solid var(--accent); background: transparent; color: var(--accent); border-radius: 10px; cursor: pointer; font-weight: 600; }
+    .ghost-btn:hover { background: rgba(244,63,94,0.12); }
+    .map-btn { margin-top: 10px; padding: 8px 14px; font-size: 13px; font-weight: 600; border: none; border-radius: 10px; background: #2563eb; color: #fff; cursor: pointer; }
+    .map-btn:hover { background: #1d4ed8; }
+
+    .subtabs { display: flex; gap: 6px; margin: 12px 0 12px; }
+    .subtab { flex: 1; padding: 8px 6px; border: 1px solid var(--border); background: var(--card2); color: #cbd5e1; border-radius: 9px; cursor: pointer; font-size: 13px; font-weight: 600; }
+    .subtab.active { background: #334155; color: #fff; border-color: #475569; }
+    .line-chip { display: inline-block; font-weight: bold; padding: 4px 9px; border-radius: 7px; font-size: 13px; margin: 0 6px 6px 0; }
+    #stopLines { margin: 6px 0 2px; }
+    details.jinfo { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 8px; }
+    details.jinfo > summary { cursor: pointer; color: #fbbf24; font-weight: 600; font-size: 13px; list-style: none; padding: 4px 0; }
+    details.jinfo > summary::-webkit-details-marker { display: none; }
+    details.jinfo > summary::before { content: "▸ "; }
+    details.jinfo[open] > summary::before { content: "▾ "; }
+    .jinfo-body { margin-top: 8px; }
+    .cat-head { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; color: #cbd5e1; margin: 14px 0 7px; padding-top: 8px; border-top: 1px solid var(--border); }
+    .cat-head:first-child { border-top: none; padding-top: 0; margin-top: 2px; }
+    .access-row { padding: 9px 2px; border-bottom: 1px solid var(--border); font-size: 14px; display: flex; gap: 10px; align-items: center; }
+    .access-ico { font-size: 18px; width: 24px; text-align: center; }
+    .access-yes { color: #4ade80; font-weight: 700; }
+    .access-part { color: #fbbf24; font-weight: 700; }
+    .access-no { color: #f87171; font-weight: 700; }
+    .access-na { color: var(--muted); font-weight: 700; }
+
+    /* Leaflet-Steuerelemente an das dunkle Thema anpassen */
+    .legend { background: rgba(15,23,42,0.92); color: var(--text); padding: 8px 11px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.4); font-size: 12px; line-height: 1.7; margin-top: 46px !important; border: 1px solid var(--border); }
+    .legend .dot { display: inline-block; width: 11px; height: 11px; border-radius: 50%; margin-right: 6px; vertical-align: middle; border: 2px solid #0f172a; box-shadow: 0 0 0 1px #64748b; }
+    .map-hint { background: rgba(15,23,42,0.92); color: var(--muted); padding: 6px 10px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.4); font-size: 12px; border: 1px solid var(--border); }
+    .linesbtn { background: rgba(15,23,42,0.92); color: var(--text); padding: 7px 11px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.4); font-size: 12px; border: 1px solid var(--border); cursor: pointer; margin-top: 8px !important; user-select: none; }
+    .linesbtn:hover { background: rgba(30,41,59,0.97); }
+    .leaflet-bar a { background: #1e293b; color: #e5e7eb; border-bottom-color: #334155; }
+    .leaflet-bar a:hover { background: #334155; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div id="topbar">🚋 KVV Karlsruhe · Störungen &amp; Baustellen</div>
+
+  <div id="sheet">
+    <div id="handle"><span class="grabber"></span></div>
+
+    <div id="sheetHeader">
+      <div class="tabs">
+        <button class="tab active" data-mode="map">Karte</button>
+        <button class="tab" data-mode="trip">Route A→B</button>
+      </div>
+
+      <div id="mapControls" class="control-row">
+        <div class="field">
+          <input id="stopInput" type="text" placeholder="Haltestelle suchen…" autocomplete="off" />
+          <div id="stopSuggestions" class="suggestions" style="display:none;"></div>
+        </div>
+        <button id="searchBtn">Suchen</button>
+      </div>
+
+      <div id="tripControls" class="control-row" style="display:none;">
+        <div class="field">
+          <input id="fromInput" type="text" placeholder="Von…" autocomplete="off" />
+          <div id="fromSuggestions" class="suggestions" style="display:none;"></div>
+        </div>
+        <div class="field">
+          <input id="toInput" type="text" placeholder="Nach…" autocomplete="off" />
+          <div id="toSuggestions" class="suggestions" style="display:none;"></div>
+        </div>
+        <button id="tripBtn">Route</button>
+      </div>
+    </div>
+
+    <div id="sheetBody">
+      <div id="disruptionsView">
+        <h2>Karte</h2>
+        <div id="disruptionsStatus" class="muted">Lade Meldungen…</div>
+        <button id="toggleMeldungen" class="ghost-btn" style="display:none;">Alle Meldungen anzeigen</button>
+        <div id="networkDisruptions" style="display:none; margin-top:12px;"></div>
+      </div>
+
+      <div id="stopView" style="display:none;">
+        <span class="backlink" id="backToList">← Zurück</span>
+        <h2 id="stopTitle">Haltestelle</h2>
+        <div id="stopStatus" class="muted"></div>
+        <div id="stopLines"></div>
+        <div class="subtabs">
+          <button class="subtab active" data-sub="dep">Abfahrten</button>
+          <button class="subtab" data-sub="stoer">Meldungen</button>
+          <button class="subtab" data-sub="barr">Barrierefrei</button>
+        </div>
+        <div id="subDep"><div id="stopDepartures"></div></div>
+        <div id="subStoer" style="display:none;"><div id="stopDisruptions"></div></div>
+        <div id="subBarr" style="display:none;"><div id="stopAccess"></div></div>
+      </div>
+
+      <div id="tripView" style="display:none;">
+        <h2>Verbindungen</h2>
+        <div id="tripStatus" class="muted">Gib Start und Ziel ein und tippe „Route“.</div>
+        <div id="journeys"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <script>
+    // ---------- Konfiguration ----------
+    const EFA_BASE = "https://www.efa-bw.de/mobidata-bw/";
+    const KA_CENTER = [49.0094, 8.4044];
+    const FALLBACK_COORD = [49.00939, 8.40447];
+    const REFRESH_SECONDS = 30;
+
+    const LINE_COLORS = {
+      "1": {bg:"#cb0b27",fg:"#fff"}, "2": {bg:"#004d95",fg:"#fff"}, "3": {bg:"#70582c",fg:"#fff"},
+      "4": {bg:"#f1c21f",fg:"#000"}, "5": {bg:"#18a6d9",fg:"#fff"}, "6": {bg:"#63b631",fg:"#fff"},
+      "7": {bg:"#626564",fg:"#fff"}, "8": {bg:"#dc6727",fg:"#fff"}, "9": {bg:"#626564",fg:"#fff"},
+      "S1": {bg:"#008e50",fg:"#fff"}, "S11": {bg:"#008e50",fg:"#fff"}, "S12": {bg:"#008e50",fg:"#fff"},
+      "S2": {bg:"#804387",fg:"#fff"}, "S31": {bg:"#00907a",fg:"#fff"}, "S32": {bg:"#00907a",fg:"#fff"},
+      "S34": {bg:"#00907a",fg:"#fff"}, "S4": {bg:"#760d37",fg:"#fff"}, "S41": {bg:"#760d37",fg:"#fff"},
+      "S42": {bg:"#009ee0",fg:"#fff"}, "S5": {bg:"#e17b7c",fg:"#141414"}, "S51": {bg:"#e17b7c",fg:"#141414"},
+      "S52": {bg:"#e17b7c",fg:"#141414"}, "S6": {bg:"#3d2d7c",fg:"#fff"}, "S7": {bg:"#fff90a",fg:"#141414"},
+      "S71": {bg:"#fff90a",fg:"#141414"}, "S8": {bg:"#4d4f23",fg:"#fff"}, "S81": {bg:"#4d4f23",fg:"#fff"},
+      "S9": {bg:"#e9a085",fg:"#141414"}
+    };
+    function lineStyle(l) { return LINE_COLORS[l] || { bg: "#64748b", fg: "#fff" }; }
+
+    // ---------- Karte (dunkles Kartenbild) ----------
+    const map = L.map("map", { zoomControl: false }).setView(KA_CENTER, 15);
+    L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+      maxZoom: 20, attribution: "© OpenStreetMap, © CARTO"
+    }).addTo(map);
+    L.control.zoom({ position: "topright" }).addTo(map);
+    const markersLayer = L.layerGroup().addTo(map);
+    const routeLayer = L.layerGroup().addTo(map);
+    const accessLayer = L.layerGroup().addTo(map); // Bahnsteig-Punkte (Barrierefreiheit)
+
+    const legend = L.control({ position: "topleft" });
+    legend.onAdd = function () {
+      const div = L.DomUtil.create("div", "legend");
+      div.innerHTML = `<span class="dot" style="background:#38bdf8;"></span> Haltestelle<br><span class="dot" style="background:#ef4444;"></span> Störung / Baustelle`;
+      return div;
+    };
+    legend.addTo(map);
+
+    const hint = L.control({ position: "topright" });
+    let hintDiv;
+    hint.onAdd = function () { hintDiv = L.DomUtil.create("div", "map-hint"); hintDiv.style.display = "none"; return hintDiv; };
+    hint.addTo(map);
+
+    // ---------- Bahn-Linien (Netz aus GTFS erzeugt: lines.geojson) ----------
+    map.createPane("linesPane");
+    map.getPane("linesPane").style.zIndex = 350; // unter den Haltestellen-Markern
+    const linesLayer = L.layerGroup();
+    let linesShown = true;
+    fetch("lines.geojson")
+      .then(r => r.json())
+      .then(gj => {
+        // Helle Unterlinie (Kontur), damit auch dunkle Linienfarben auf der dunklen Karte sichtbar sind.
+        const casing = L.geoJSON(gj, {
+          pane: "linesPane",
+          style: () => ({ color: "#e5e7eb", weight: 7, opacity: 0.55, lineJoin: "round", lineCap: "round" })
+        });
+        const colored = L.geoJSON(gj, {
+          pane: "linesPane",
+          style: f => ({ color: f.properties.color, weight: 4, opacity: 1, lineJoin: "round", lineCap: "round" }),
+          onEachFeature: (f, l) => l.bindTooltip("Linie " + f.properties.line, { sticky: true })
+        });
+        linesLayer.addLayer(casing);
+        linesLayer.addLayer(colored);
+        if (linesShown) linesLayer.addTo(map);
+      })
+      .catch(e => console.warn("lines.geojson konnte nicht geladen werden – liegt die Datei neben index.html?", e));
+
+    const linesToggle = L.control({ position: "topleft" });
+    linesToggle.onAdd = function () {
+      const d = L.DomUtil.create("div", "linesbtn");
+      d.innerHTML = "🚋 Linien: an";
+      d.onclick = () => {
+        linesShown = !linesShown;
+        if (linesShown) { linesLayer.addTo(map); d.innerHTML = "🚋 Linien: an"; }
+        else { map.removeLayer(linesLayer); d.innerHTML = "🚋 Linien: aus"; }
+      };
+      L.DomEvent.disableClickPropagation(d);
+      return d;
+    };
+    linesToggle.addTo(map);
+
+    const MARK_NORMAL = "#38bdf8", MARK_ALERT = "#ef4444";
+
+    // ---------- Zustand ----------
+    let currentStop = null, lastUpdate = null, lastCount = 0, secondsLeft = REFRESH_SECONDS;
+    let currentMode = "map", panelView = "list";
+    let currentDisruptions = [];
+    const stopCache = {};
+    let markerIndex = {};
+    let meldungenVisible = false, lastMeldungenCount = 0;
+    const accessCache = {}; // stopId -> HTML der Barrierefreiheits-Infos (OSM)
+
+    // ---------- Hilfsfunktionen ----------
+    function buildUrl(endpoint, params) {
+      const url = new URL(EFA_BASE + endpoint);
+      url.searchParams.set("outputFormat", "rapidJSON");
+      url.searchParams.set("coordOutputFormat", "WGS84[dd.ddddd]");
+      for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
+      return url.toString();
+    }
+    function normalizeCoord(c) {
+      if (!Array.isArray(c) || c.length < 2) return null;
+      const [a, b] = c;
+      return (a > 45 && a < 56) ? [a, b] : [b, a];
+    }
+    function distKmToKA(c) {
+      const p = normalizeCoord(c); if (!p) return 99999;
+      const [la1, lo1] = KA_CENTER, [la2, lo2] = p;
+      const R = 6371, dLa = (la2-la1)*Math.PI/180, dLo = (lo2-lo1)*Math.PI/180;
+      const x = Math.sin(dLa/2)**2 + Math.cos(la1*Math.PI/180)*Math.cos(la2*Math.PI/180)*Math.sin(dLo/2)**2;
+      return 2 * R * Math.asin(Math.sqrt(x));
+    }
+    function fmtTime(iso) { return iso ? new Date(iso).toLocaleTimeString("de-DE", { timeZone: "Europe/Berlin", hour: "2-digit", minute: "2-digit" }) : "–"; }
+    function fmtDateTime(iso) { return iso ? new Date(iso).toLocaleString("de-DE", { timeZone: "Europe/Berlin", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }) : ""; }
+    function delayMin(p, e) { return (p && e) ? Math.round((new Date(e) - new Date(p)) / 60000) : 0; }
+    function shortName(name) { const p = (name || "").split(","); return (p.length > 1 ? p.slice(1).join(",") : p[0]).trim(); }
+
+    // ---------- API ----------
+    async function apiJson(endpoint, params) {
+      const res = await fetch(buildUrl(endpoint, params));
+      if (!res.ok) throw new Error(endpoint + " HTTP " + res.status);
+      return await res.json();
+    }
+    async function searchStops(term) {
+      const data = await apiJson("XML_STOPFINDER_REQUEST", { type_sf: "any", name_sf: term });
+      let locs = (data.locations || []).filter(l => l.id && (l.type === "stop" || l.type === "platform"));
+      const score = (l) => (l.matchQuality || 0) + Math.max(0, 300 - distKmToKA(l.coord)) * 4;
+      locs.sort((a, b) => score(b) - score(a));
+      return locs;
+    }
+    async function getNearbyStops(lat, lon, radius) {
+      const data = await apiJson("XML_COORD_REQUEST", {
+        coord: `${lon}:${lat}:WGS84[dd.ddddd]`,
+        type_1: "STOP", radius_1: String(radius), max: "120", inclFilter: "1"
+      });
+      return (data.locations || []).filter(l => l.id && l.coord);
+    }
+    async function getDepartureData(stopId) {
+      return await apiJson("XML_DM_REQUEST", { name_dm: stopId, type_dm: "stop", mode: "direct", useRealtime: "1", limit: "12" });
+    }
+    async function getTrips(fromId, toId) {
+      const data = await apiJson("XML_TRIP_REQUEST2", {
+        type_origin: "stop", name_origin: fromId, type_destination: "stop", name_destination: toId,
+        calcNumberOfTrips: "4", useRealtime: "1"
+      });
+      return data.journeys || [];
+    }
+    async function getServiceDisruptions() {
+      const data = await apiJson("XML_ADDINFO_REQUEST", { filterPublicationStatus: "current" });
+      let list = data.infos?.current || data.infos || data.serverInfos || data.additionalInformation || [];
+      if (!Array.isArray(list)) list = [];
+      return list.filter(i => i.priority !== "low" && i.priority !== "veryLow");
+    }
+
+    // ---------- Störungen ----------
+    function collectInfos(items) {
+      const m = new Map();
+      (items || []).forEach(info => {
+        if (!info) return;
+        const key = info.id || (info.title || "") + (info.subtitle || "");
+        if (!m.has(key)) m.set(key, info);
+      });
+      return [...m.values()];
+    }
+    const ALERT_LABELS = {
+      constructionWork: "Baustelle", maintenanceWork: "Bauarbeiten",
+      disruption: "Störung", technicalProblem: "Technische Störung",
+      accident: "Störung", congestion: "Verspätungen",
+      routeDiversion: "Umleitung", strike: "Streik"
+    };
+    function infoLink(info) { return (info.infoLinks && info.infoLinks[0]) || {}; }
+    function infoText(info) {
+      const l = infoLink(info);
+      return l.content || l.htmlText || info.content || info.subtitle || "";
+    }
+    function alertLabel(info) {
+      const known = ALERT_LABELS[info.properties?.AlertCause];
+      if (known) return known;
+      const t = infoText(info).toLowerCase();
+      if (t.includes("baustelle")) return "Baustelle";
+      if (t.includes("umleit")) return "Umleitung";
+      if (t.includes("schienenersatz") || t.includes("ersatzverkehr")) return "Ersatzverkehr";
+      return "Hinweis";
+    }
+    function affectedLineNumbers(info) {
+      return [...new Set((info.affected?.lines || []).map(l => l.number).filter(Boolean))];
+    }
+    function infoHeadline(info) {
+      const l = infoLink(info);
+      return l.subtitle || l.title || "";
+    }
+    function infoTitle(info) {
+      const label = alertLabel(info);
+      const head = infoHeadline(info);
+      if (head) return `${label}: ${head}`;
+      const lines = affectedLineNumbers(info).slice(0, 6);
+      return lines.length ? `${label} · Linie ${lines.join(", ")}` : label;
+    }
+    function infoValidity(info) {
+      let from, to;
+      const v = info.timestamps?.validity;
+      if (Array.isArray(v) && v.length) { from = v[0].from; to = v[0].to; }
+      else if (v && typeof v === "object") { from = v.from; to = v.to; }
+      const av = info.timestamps?.availability;
+      if (!from && av) from = av.from;
+      if (!to && av) to = av.to;
+      const openEnd = av?.isOpenEnd;
+      if (!from && !to) return "";
+      const f = from ? fmtDateTime(from) : "?";
+      const t = to ? fmtDateTime(to) : (openEnd ? "bis auf Weiteres" : "?");
+      return `Gültig: ${f} – ${t}`;
+    }
+    function infoLinkHtml(info) {
+      const l = infoLink(info);
+      let html = "";
+      if (l.url && /^https?:/i.test(l.url) && !l.url.includes("nohost"))
+        html += `<div><a href="${l.url}" target="_blank" rel="noopener">${l.urlText || "Mehr Infos"}</a></div>`;
+      const att = l.attachments && l.attachments[0];
+      if (att && att.virtPath)
+        html += `<div><a href="${att.virtPath}" target="_blank" rel="noopener">${att.linkText || att.fileName || "Anhang"}</a></div>`;
+      return html;
+    }
+    function disruptionHtml(info) {
+      const validity = infoValidity(info);
+      const text = infoText(info);
+      const provider = info.properties?.providerCode
+        ? `<div style="font-size:11px; color:#94a3b8; margin-top:3px;">Quelle: ${info.properties.providerCode}</div>` : "";
+      return `<div class="disruption"><div class="d-title">⚠️ ${infoTitle(info)}</div>${validity ? `<div class="d-valid">${validity}</div>` : ""}${text ? `<div class="d-content">${text}</div>` : ""}${infoLinkHtml(info)}${provider}</div>`;
+    }
+    function disruptionCompactHtml(info) {
+      const validity = infoValidity(info);
+      const provider = info.properties?.providerCode
+        ? `<span style="font-size:11px; color:#94a3b8;"> · ${info.properties.providerCode}</span>` : "";
+      return `<div class="disruption"><div class="d-title">⚠️ ${infoTitle(info)}${provider}</div>${validity ? `<div class="d-valid">${validity}</div>` : ""}</div>`;
+    }
+    // Kategorisiert eine Meldung in Verspätung / Störung / Baustelle.
+    function infoCategory(info) {
+      const c = info.properties?.AlertCause || "";
+      const t = (alertLabel(info) + " " + infoText(info)).toLowerCase();
+      if (c === "constructionWork" || c === "maintenanceWork" || /baustelle|bauarbeit/.test(t)) return "baustelle";
+      if (c === "congestion" || /versp[aä]tung|verz[oö]gerung/.test(t)) return "verspaetung";
+      return "stoerung";
+    }
+    const CAT_META = { verspaetung: { label: "Verspätungen", icon: "⏱️" }, stoerung: { label: "Störungen", icon: "⚠️" }, baustelle: { label: "Baustellen", icon: "🚧" } };
+    const CAT_ORDER = ["verspaetung", "stoerung", "baustelle"];
+    // Rendert Meldungen gruppiert nach Kategorie (mit Zwischenüberschriften).
+    function renderGroupedDisruptions(infos, compact) {
+      const groups = { verspaetung: [], stoerung: [], baustelle: [] };
+      infos.forEach(i => groups[infoCategory(i)].push(i));
+      let html = "";
+      CAT_ORDER.forEach(cat => {
+        const arr = groups[cat];
+        if (!arr.length) return;
+        const m = CAT_META[cat];
+        html += `<div class="cat-head">${m.icon} ${m.label} (${arr.length})</div>`;
+        html += arr.map(compact ? disruptionCompactHtml : disruptionHtml).join("");
+      });
+      return html;
+    }
+    function norm(s) {
+      return (s || "").toLowerCase()
+        .replace(/ä/g, "a").replace(/ö/g, "o").replace(/ü/g, "u").replace(/ß/g, "ss")
+        .replace(/\(.*?\)/g, " ").replace(/[.,\-/]/g, " ").replace(/\s+/g, " ").trim();
+    }
+    function affectedMatchesStop(info, stop) {
+      const list = info.affected?.stops || [];
+      if (!list.length) return false;
+      const sname = norm(shortName(stop.name));
+      const sStopId = stop.properties?.stopId;
+      return list.some(a => {
+        if (stop.id && a.id && a.id === stop.id) return true;
+        if (sStopId && a.properties?.stopId && a.properties.stopId === sStopId) return true;
+        const an = norm(shortName(a.name));
+        return an && sname && an.length > 3 && (an === sname || an.includes(sname) || sname.includes(an));
+      });
+    }
+    function textMentionsStop(info, stop) {
+      const n = norm(shortName(stop.name));
+      if (n.length < 5) return false;
+      return norm(infoText(info)).includes(n);
+    }
+    function disruptionsForStop(stop) {
+      if (!stop) return [];
+      return currentDisruptions.filter(info => affectedMatchesStop(info, stop) || textMentionsStop(info, stop));
+    }
+
+    // ---------- Karte: Marker ----------
+    function refreshMarkers() {
+      const zoom = map.getZoom();
+      if (zoom < 13) {
+        markersLayer.clearLayers();
+        hintDiv.style.display = "block";
+        hintDiv.textContent = "Zoom hinein, um Haltestellen zu sehen.";
+        return;
+      }
+      hintDiv.style.display = "none";
+      const c = map.getCenter();
+      getNearbyStops(c.lat, c.lng, 1400).then(stops => {
+        markersLayer.clearLayers();
+        markerIndex = {};
+        stops.forEach(stop => {
+          const p = normalizeCoord(stop.coord);
+          if (!p) return;
+          const disrupted = disruptionsForStop(stop).length > 0;
+          const marker = L.circleMarker(p, {
+            radius: disrupted ? 8 : 6,
+            fillColor: disrupted ? MARK_ALERT : MARK_NORMAL,
+            color: "#0f172a", weight: 2, fillOpacity: 1
+          }).addTo(markersLayer);
+          marker.bindTooltip(shortName(stop.name) + (disrupted ? " ⚠️" : ""), { direction: "top" });
+          marker.on("click", () => openStop(stop));
+          markerIndex[stop.id] = marker;
+        });
+      }).catch(err => console.error("Nearby-Stops Fehler:", err));
+    }
+
+    // ---------- Panel-Ansichten ----------
+    function showPanel(view) {
+      panelView = view;
+      document.getElementById("disruptionsView").style.display = (view === "list" && currentMode === "map") ? "block" : "none";
+      document.getElementById("stopView").style.display = (view === "stop" && currentMode === "map") ? "block" : "none";
+      document.getElementById("tripView").style.display = (currentMode === "trip") ? "block" : "none";
+    }
+    function isKARelevant(info) {
+      if (info.properties?.providerCode === "KVV") return true;
+      const stops = info.affected?.stops || [];
+      if (stops.some(s => (s.id || "").startsWith("de:0821"))) return true;
+      return stops.some(s => /karlsruhe|ettlingen|durlach|bruchsal|rastatt|bretten|w[oö]rth|pforzheim/i.test((s.name || "") + " " + (s.parent?.name || "")));
+    }
+    const PRIO_RANK = { veryHigh: 0, high: 1, normal: 2, low: 3, veryLow: 4 };
+    function renderNetworkDisruptions() {
+      const box = document.getElementById("networkDisruptions");
+      const status = document.getElementById("disruptionsStatus");
+      const btn = document.getElementById("toggleMeldungen");
+      const list = collectInfos(currentDisruptions).filter(isKARelevant);
+      list.sort((a, b) => (PRIO_RANK[a.priority] ?? 9) - (PRIO_RANK[b.priority] ?? 9));
+      lastMeldungenCount = list.length;
+      status.textContent = "Tippe eine Haltestelle auf der Karte an. Rot = Störung / Baustelle.";
+      box.innerHTML = renderGroupedDisruptions(list.slice(0, 50), true);
+      btn.style.display = list.length ? "inline-block" : "none";
+      btn.textContent = meldungenVisible ? "Meldungen ausblenden" : `Alle Meldungen anzeigen (${list.length})`;
+    }
+
+    // ---------- Angeklickte Haltestelle ----------
+    function renderDepartures(container, events) {
+      container.innerHTML = "";
+      if (!events.length) { container.innerHTML = "<p>Keine Abfahrten gefunden.</p>"; return; }
+      events.forEach(ev => {
+        const line = ev.transportation?.number || "?";
+        const dest = ev.transportation?.destination?.name || "?";
+        const planned = ev.departureTimePlanned, est = ev.departureTimeEstimated || planned;
+        const d = delayMin(planned, est), s = lineStyle(line);
+        const status = d > 0 ? `<span class="delay">+${d} min</span>` : `<span class="ontime">pünktlich</span>`;
+        const row = document.createElement("div");
+        row.className = "departure";
+        row.innerHTML = `<div class="line-badge" style="background:${s.bg}; color:${s.fg};">${line}</div><div class="dest">${dest}</div><div class="time">${fmtTime(est)} ${status}</div>`;
+        container.appendChild(row);
+      });
+    }
+    // Sub-Tabs innerhalb einer Haltestelle
+    function setSubTab(name) {
+      document.querySelectorAll(".subtab").forEach(t => t.classList.toggle("active", t.dataset.sub === name));
+      document.getElementById("subDep").style.display = name === "dep" ? "block" : "none";
+      document.getElementById("subStoer").style.display = name === "stoer" ? "block" : "none";
+      document.getElementById("subBarr").style.display = name === "barr" ? "block" : "none";
+      if (name === "barr" && currentStop) loadAccessibility(currentStop); // erst bei Bedarf laden
+    }
+    // Barrierefreiheit aus OpenStreetMap (Overpass) – wheelchair & taktiles Leitsystem der Bahnsteige.
+    function accessClass(v) {
+      return v === "yes" ? "access-yes" : v === "limited" ? "access-part" : v === "no" ? "access-no" : "access-na";
+    }
+    const WC_TXT = { yes: "barrierefrei", limited: "eingeschränkt barrierefrei", no: "nicht barrierefrei" };
+    const WC_COLOR = { yes: "#22c55e", limited: "#fbbf24", no: "#ef4444", unknown: "#94a3b8" };
+    // Zeichnet je einen Punkt pro Bahnsteig, eingefärbt nach Rollstuhl-Zugänglichkeit.
+    function drawAccessMarkers(markers) {
+      accessLayer.clearLayers();
+      markers.forEach(m => {
+        L.circleMarker([m.lat, m.lon], { radius: 6, fillColor: m.color, color: "#fff", weight: 2, fillOpacity: 1 })
+          .addTo(accessLayer).bindTooltip(m.label, { direction: "top" });
+      });
+    }
+    async function loadAccessibility(stop) {
+      const el = document.getElementById("stopAccess");
+      if (accessCache[stop.id]) { el.innerHTML = accessCache[stop.id].html; drawAccessMarkers(accessCache[stop.id].markers); return; }
+      const p = normalizeCoord(stop.coord);
+      if (!p) { el.innerHTML = `<p class="muted">Keine Koordinaten für diese Haltestelle.</p>`; return; }
+      el.innerHTML = `<p class="muted">Lade Barrierefreiheit (OpenStreetMap)…</p>`;
+      const q = `[out:json][timeout:20];(node(around:90,${p[0]},${p[1]})["public_transport"~"platform|stop_position"];node(around:90,${p[0]},${p[1]})["railway"="tram_stop"];node(around:90,${p[0]},${p[1]})["highway"="bus_stop"];);out;`;
+      try {
+        const res = await fetch("https://overpass-api.de/api/interpreter", { method: "POST", body: "data=" + encodeURIComponent(q) });
+        if (!res.ok) throw new Error("Overpass HTTP " + res.status);
+        const data = await res.json();
+        let plats = (data.elements || []).filter(e => e.tags && e.lat != null && e.lon != null &&
+          (e.tags.public_transport === "platform" || e.tags.railway === "tram_stop" || e.tags.highway === "bus_stop"));
+        if (!plats.length) plats = (data.elements || []).filter(e => e.tags && e.lat != null && e.lon != null);
+        if (!plats.length) {
+          el.innerHTML = `<p class="muted">Für diese Haltestelle sind in OpenStreetMap keine Bahnsteig-Daten hinterlegt.</p>`;
+          return;
+        }
+        // Richtung (Nord/Süd oder Ost/West) aus der Lage bestimmen
+        const lats = plats.map(e => e.lat), lons = plats.map(e => e.lon);
+        const dlat = Math.max(...lats) - Math.min(...lats), dlon = Math.max(...lons) - Math.min(...lons);
+        const clat = (Math.max(...lats) + Math.min(...lats)) / 2, clon = (Math.max(...lons) + Math.min(...lons)) / 2;
+        const seen = new Set();
+        let rows = ""; const markers = [];
+        plats.forEach((e, i) => {
+          const t = e.tags;
+          const wcv = t.wheelchair || "unknown";
+          let dir = "";
+          if (plats.length > 1) dir = dlat >= dlon ? (e.lat >= clat ? "Nord" : "Süd") : (e.lon >= clon ? "Ost" : "West");
+          const label = (t.name || "Bahnsteig") + (dir ? ` (${dir})` : "");
+          const steig = t.ref ? ` · Steig ${t.ref}` : "";
+          const lines = t.route_ref ? ` · Linien ${t.route_ref.replace(/;/g, ", ")}` : "";
+          const sig = label + steig + wcv + (t.route_ref || i);
+          if (seen.has(sig)) return;
+          seen.add(sig);
+          const tac = t.tactile_paving === "yes" ? ` · ⠿ taktiles Leitsystem` : "";
+          rows += `<div class="access-row"><span class="access-ico">♿</span><span><b>${label}</b><span class="muted">${steig}${lines}</span><br><span class="${accessClass(wcv)}">${WC_TXT[wcv] || "keine Angabe (Rollstuhl)"}</span>${tac}</span></div>`;
+          markers.push({ lat: e.lat, lon: e.lon, color: WC_COLOR[wcv], label: `${label}: ${WC_TXT[wcv] || "keine Angabe"}` });
+        });
+        const html = `${rows}<div class="muted" style="margin-top:10px;">${seen.size} Bahnsteig(e) laut OpenStreetMap · farbige Punkte auf der Karte · Quelle: OpenStreetMap-Mitwirkende</div>`;
+        accessCache[stop.id] = { html, markers };
+        el.innerHTML = html;
+        drawAccessMarkers(markers);
+      } catch (err) {
+        el.innerHTML = `<p class="muted">Barrierefreiheit konnte nicht geladen werden: ${err.message}</p>`;
+      }
+    }
+    async function openStop(stop) {
+      currentStop = stop;
+      stopCache[stop.id] = stop;
+      const p = normalizeCoord(stop.coord) || FALLBACK_COORD;
+      map.panTo(p);
+      document.getElementById("stopTitle").textContent = shortName(stop.name);
+      document.getElementById("stopStatus").textContent = "Lade Abfahrten…";
+      document.getElementById("stopDepartures").innerHTML = "";
+      document.getElementById("stopDisruptions").innerHTML = "";
+      document.getElementById("stopLines").innerHTML = "";
+      document.getElementById("stopAccess").innerHTML = "";
+      accessLayer.clearLayers();
+      setSubTab("dep");
+      showPanel("stop");
+      expandSheet();
+      secondsLeft = REFRESH_SECONDS;
+      await loadStopDepartures();
+    }
+    async function loadStopDepartures() {
+      if (!currentStop || panelView !== "stop") return;
+      try {
+        const data = await getDepartureData(currentStop.id);
+        const events = data.stopEvents || [];
+        renderDepartures(document.getElementById("stopDepartures"), events);
+        // Linien-Übersicht (farbige Chips) der Haltestelle
+        const lines = [...new Set(events.map(ev => ev.transportation?.number).filter(Boolean))];
+        document.getElementById("stopLines").innerHTML = lines.map(l => {
+          const s = lineStyle(l);
+          return `<span class="line-chip" style="background:${s.bg}; color:${s.fg};">${l}</span>`;
+        }).join("");
+        // Meldungen
+        const stopInfos = collectInfos([].concat(...events.map(ev => ev.infos || []), disruptionsForStop(currentStop)));
+        document.getElementById("stopDisruptions").innerHTML = stopInfos.length
+          ? renderGroupedDisruptions(stopInfos, false)
+          : `<p class="muted">Keine aktuellen Störungen oder Baustellen an dieser Haltestelle.</p>`;
+        const stoerTab = document.querySelector('.subtab[data-sub="stoer"]');
+        if (stoerTab) stoerTab.textContent = stopInfos.length ? `Meldungen (${stopInfos.length})` : "Meldungen";
+        // Barrierefreiheit wird beim Öffnen des Tabs „Barrierefrei" geladen (OpenStreetMap).
+        document.getElementById("stopAccess").innerHTML = `<p class="muted">Tab „Barrierefrei" öffnen, um die Daten aus OpenStreetMap zu laden.</p>`;
+        // Marker rot färben, wenn Meldungen vorliegen
+        if (stopInfos.length && markerIndex[currentStop.id]) markerIndex[currentStop.id].setStyle({ fillColor: MARK_ALERT, radius: 8 });
+        lastUpdate = new Date(); lastCount = events.length;
+        document.getElementById("stopStatus").textContent = `${lastCount} Abfahrten · aktualisiert ${fmtTime(lastUpdate.toISOString())} · nächste in ${secondsLeft}s`;
+      } catch (err) {
+        document.getElementById("stopStatus").textContent = "Fehler: " + err.message;
+        console.error(err);
+      }
+    }
+
+    // ---------- Verbindungen ----------
+    function isWalkLeg(leg) {
+      const cls = leg.transportation?.product?.class;
+      return !leg.transportation || cls === 99 || cls === 100 || leg.transportation?.name === "Fußweg";
+    }
+    function getLegCoords(leg) {
+      if (Array.isArray(leg.coords) && leg.coords.length) return leg.coords.map(normalizeCoord).filter(Boolean);
+      const seq = leg.stopSequence || [];
+      const pts = seq.map(s => normalizeCoord(s.coord)).filter(Boolean);
+      if (pts.length >= 2) return pts;
+      const o = normalizeCoord(leg.origin?.coord), d = normalizeCoord(leg.destination?.coord);
+      return (o && d) ? [o, d] : [];
+    }
+    function drawJourney(journey) {
+      routeLayer.clearLayers();
+      const all = [];
+      (journey.legs || []).forEach(leg => {
+        const pts = getLegCoords(leg);
+        if (pts.length < 2) return;
+        all.push(...pts);
+        const disrupted = (leg.infos || []).length > 0;
+        let color, dash = null;
+        if (isWalkLeg(leg)) { color = "#94a3b8"; dash = "3 8"; }
+        else { color = disrupted ? "#ef4444" : lineStyle(leg.transportation?.number || "").bg; }
+        L.polyline(pts, { color: "#0f172a", weight: (disrupted ? 10 : 9), opacity: 0.8 }).addTo(routeLayer);
+        L.polyline(pts, { color, weight: (disrupted ? 6 : 5), opacity: 0.98, dashArray: dash }).addTo(routeLayer);
+      });
+      if (all.length) {
+        L.circleMarker(all[0], { radius: 7, fillColor: "#22c55e", color: "#0f172a", weight: 2, fillOpacity: 1 }).addTo(routeLayer).bindTooltip("Start", { direction: "top" });
+        L.circleMarker(all[all.length - 1], { radius: 7, fillColor: "#f43f5e", color: "#0f172a", weight: 2, fillOpacity: 1 }).addTo(routeLayer).bindTooltip("Ziel", { direction: "top" });
+        const visible = sheet.getBoundingClientRect().height - currentOffset;
+        map.fitBounds(L.latLngBounds(all), { paddingTopLeft: [40, 60], paddingBottomRight: [40, visible + 20] });
+      }
+    }
+    function renderJourneys(journeys) {
+      const container = document.getElementById("journeys");
+      container.innerHTML = "";
+      if (!journeys.length) { container.innerHTML = "<p>Keine Verbindung gefunden.</p>"; return; }
+      journeys.forEach(journey => {
+        const legs = journey.legs || [];
+        if (!legs.length) return;
+        const dep = legs[0].origin?.departureTimeEstimated || legs[0].origin?.departureTimePlanned;
+        const arr = legs[legs.length - 1].destination?.arrivalTimeEstimated || legs[legs.length - 1].destination?.arrivalTimePlanned;
+        const interchanges = Math.max(0, legs.filter(l => !isWalkLeg(l)).length - 1);
+        const durationText = (dep && arr) ? Math.round((new Date(arr) - new Date(dep)) / 60000) + " min" : "";
+        let legsHtml = ""; const allInfos = [];
+        legs.forEach(leg => {
+          const legInfos = leg.infos || []; allInfos.push(...legInfos);
+          const disrupted = legInfos.length > 0;
+          const legDep = leg.origin?.departureTimeEstimated || leg.origin?.departureTimePlanned;
+          const fromName = leg.origin?.name || "?", toName = leg.destination?.name || "?";
+          if (isWalkLeg(leg)) {
+            legsHtml += `<div class="leg ${disrupted ? "disrupted" : ""}"><div class="leg-time">${fmtTime(legDep)}</div><div class="leg-body"><span class="walk-badge">🚶 Fußweg</span><div class="to">${fromName} → ${toName}</div></div></div>`;
+          } else {
+            const line = leg.transportation?.number || leg.transportation?.name || "?";
+            const dir = leg.transportation?.destination?.name || toName; const s = lineStyle(line);
+            legsHtml += `<div class="leg ${disrupted ? "disrupted" : ""}"><div class="leg-time">${fmtTime(legDep)}</div><div class="leg-body"><span class="line-badge" style="background:${s.bg}; color:${s.fg};">${line}</span> Richtung ${dir}<div class="to">${fromName} → ${toName}</div>${disrupted ? `<div style="color:#f87171; font-size:12px; margin-top:2px;">⚠️ Störung/Umleitung auf dieser Etappe</div>` : ""}</div></div>`;
+          }
+        });
+        const infos = collectInfos(allInfos);
+        const infoBlock = infos.length
+          ? `<details class="jinfo"><summary>⚠️ ${infos.length} Meldung(en) auf dieser Route – klicke für Details</summary><div class="jinfo-body">${infos.map(disruptionHtml).join("")}</div></details>`
+          : "";
+        const card = document.createElement("div");
+        card.className = "journey";
+        card.innerHTML = `<div class="journey-head"><span>${fmtTime(dep)} → ${fmtTime(arr)}</span><span class="journey-sub">${durationText} · ${interchanges} Umstieg(e)</span></div>${legsHtml}${infoBlock}`;
+        const showBtn = document.createElement("button");
+        showBtn.className = "map-btn";
+        showBtn.textContent = "Auf Karte zeigen";
+        showBtn.addEventListener("click", () => drawJourney(journey));
+        card.appendChild(showBtn);
+        container.appendChild(card);
+      });
+      if (journeys[0]) drawJourney(journeys[0]);
+    }
+    async function resolveField(input) {
+      if (input.dataset.stopId && stopCache[input.dataset.stopId]) return stopCache[input.dataset.stopId];
+      const term = input.value.trim();
+      if (term.length < 2) return null;
+      const stops = await searchStops(term);
+      return stops[0] || null;
+    }
+    async function handleTrip() {
+      const status = document.getElementById("tripStatus");
+      document.getElementById("journeys").innerHTML = "";
+      status.textContent = "Suche Verbindung…";
+      try {
+        const from = await resolveField(document.getElementById("fromInput"));
+        const to = await resolveField(document.getElementById("toInput"));
+        if (!from) throw new Error("Start nicht gefunden.");
+        if (!to) throw new Error("Ziel nicht gefunden.");
+        status.textContent = `Von ${from.name} nach ${to.name}`;
+        renderJourneys(await getTrips(from.id, to.id));
+      } catch (err) { status.textContent = "Fehler: " + err.message; console.error(err); }
+    }
+    async function handleSearch() {
+      const stop = await resolveField(document.getElementById("stopInput"));
+      if (stop) { document.getElementById("stopSuggestions").style.display = "none"; openStop(stop); }
+    }
+
+    // ---------- Autocomplete ----------
+    function attachAutocomplete(input, box, onSelect) {
+      let timer = null;
+      input.addEventListener("input", () => {
+        if (input.value !== input.dataset.stopName) delete input.dataset.stopId;
+        const term = input.value.trim();
+        clearTimeout(timer);
+        if (term.length < 2) { box.style.display = "none"; return; }
+        timer = setTimeout(async () => {
+          try {
+            const stops = await searchStops(term);
+            if (!stops.length) { box.innerHTML = "<div class='suggestion'>Keine Haltestelle gefunden.</div>"; box.style.display = "block"; return; }
+            box.innerHTML = "";
+            stops.slice(0, 8).forEach(stop => {
+              const item = document.createElement("div");
+              item.className = "suggestion";
+              const place = stop.parent?.name ? " <small>(" + stop.parent.name + ")</small>" : "";
+              item.innerHTML = stop.name + place;
+              item.addEventListener("mousedown", (e) => {
+                e.preventDefault();
+                input.value = stop.name; input.dataset.stopId = stop.id; input.dataset.stopName = stop.name;
+                stopCache[stop.id] = stop; box.style.display = "none";
+                if (onSelect) onSelect(stop);
+              });
+              box.appendChild(item);
+            });
+            box.style.display = "block";
+          } catch (e) { box.style.display = "none"; }
+        }, 250);
+      });
+      input.addEventListener("focus", expandSheet);
+      input.addEventListener("blur", () => setTimeout(() => { box.style.display = "none"; }, 150));
+    }
+
+    // ---------- Modus ----------
+    function switchMode(mode) {
+      currentMode = mode;
+      document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t.dataset.mode === mode));
+      document.getElementById("mapControls").style.display = mode === "map" ? "flex" : "none";
+      document.getElementById("tripControls").style.display = mode === "trip" ? "flex" : "none";
+      if (mode === "map") routeLayer.clearLayers();
+      showPanel(mode === "trip" ? "trip" : (currentStop ? "stop" : "list"));
+      measureSheet(); applySheet(false);
+    }
+
+    // ---------- Bottom Sheet ----------
+    const sheet = document.getElementById("sheet");
+    const handle = document.getElementById("handle");
+    const sheetHeader = document.getElementById("sheetHeader");
+    let maxOffset = 0, currentOffset = 0, sheetExpanded = false, dragging = false, startY = 0, startOffset = 0, moved = 0;
+
+    function measureSheet() {
+      const sh = sheet.getBoundingClientRect().height;
+      const peek = handle.offsetHeight + sheetHeader.offsetHeight + 8;
+      maxOffset = Math.max(0, sh - peek);
+    }
+    function setOffset(o, animate) {
+      currentOffset = Math.min(maxOffset, Math.max(0, o));
+      sheet.style.transition = animate ? "transform .28s ease" : "none";
+      sheet.style.transform = `translateY(${currentOffset}px)`;
+    }
+    function applySheet(animate) { setOffset(sheetExpanded ? 0 : maxOffset, animate); }
+    function expandSheet() { sheetExpanded = true; measureSheet(); applySheet(true); }
+    function collapseSheet() { sheetExpanded = false; measureSheet(); applySheet(true); }
+
+    handle.addEventListener("pointerdown", (e) => {
+      dragging = true; moved = 0; startY = e.clientY; measureSheet(); startOffset = currentOffset;
+      try { handle.setPointerCapture(e.pointerId); } catch (_) {}
+      sheet.style.transition = "none"; e.preventDefault();
+    });
+    window.addEventListener("pointermove", (e) => {
+      if (!dragging) return;
+      const dy = e.clientY - startY; moved = Math.max(moved, Math.abs(dy));
+      setOffset(startOffset + dy, false);
+    });
+    window.addEventListener("pointerup", () => {
+      if (!dragging) return; dragging = false;
+      if (moved < 6) sheetExpanded = !sheetExpanded;               // Tippen = umschalten
+      else sheetExpanded = currentOffset < maxOffset / 2;          // Ziehen = nächster Rastpunkt
+      applySheet(true);
+    });
+    window.addEventListener("resize", () => { measureSheet(); applySheet(false); });
+
+    // Auf Desktop: Panel hebt sich beim Überfahren mit der Maus, senkt sich beim Verlassen.
+    sheet.addEventListener("mouseenter", () => { if (!dragging) expandSheet(); });
+    sheet.addEventListener("mouseleave", () => { if (!dragging && !sheet.contains(document.activeElement)) collapseSheet(); });
+
+    // ---------- Verdrahtung ----------
+    attachAutocomplete(document.getElementById("stopInput"), document.getElementById("stopSuggestions"), (s) => openStop(s));
+    attachAutocomplete(document.getElementById("fromInput"), document.getElementById("fromSuggestions"), null);
+    attachAutocomplete(document.getElementById("toInput"), document.getElementById("toSuggestions"), null);
+    document.getElementById("searchBtn").addEventListener("click", handleSearch);
+    document.getElementById("stopInput").addEventListener("keydown", e => { if (e.key === "Enter") handleSearch(); });
+    document.getElementById("tripBtn").addEventListener("click", () => { handleTrip(); expandSheet(); });
+    document.getElementById("toInput").addEventListener("keydown", e => { if (e.key === "Enter") { handleTrip(); expandSheet(); } });
+    document.getElementById("backToList").addEventListener("click", () => { currentStop = null; showPanel("list"); });
+    document.getElementById("toggleMeldungen").addEventListener("click", () => {
+      meldungenVisible = !meldungenVisible;
+      document.getElementById("networkDisruptions").style.display = meldungenVisible ? "block" : "none";
+      document.getElementById("toggleMeldungen").textContent = meldungenVisible ? "Meldungen ausblenden" : `Alle Meldungen anzeigen (${lastMeldungenCount})`;
+      if (meldungenVisible) expandSheet();
+    });
+    document.querySelectorAll(".tab").forEach(t => t.addEventListener("click", () => switchMode(t.dataset.mode)));
+    document.querySelectorAll(".subtab").forEach(t => t.addEventListener("click", () => setSubTab(t.dataset.sub)));
+
+    let moveTimer = null;
+    map.on("moveend", () => { clearTimeout(moveTimer); moveTimer = setTimeout(refreshMarkers, 400); });
+
+    // ---------- Timer ----------
+    function tick() {
+      if (currentMode !== "map" || panelView !== "stop") return;
+      secondsLeft -= 1;
+      if (secondsLeft <= 0) { secondsLeft = REFRESH_SECONDS; loadStopDepartures(); }
+      else if (currentStop) document.getElementById("stopStatus").textContent = `${lastCount} Abfahrten · aktualisiert ${lastUpdate ? fmtTime(lastUpdate.toISOString()) : "–"} · nächste in ${secondsLeft}s`;
+    }
+
+    // ---------- Start ----------
+    (async function init() {
+      map.invalidateSize();
+      measureSheet(); collapseSheet();
+      try {
+        currentDisruptions = await getServiceDisruptions();
+        renderNetworkDisruptions();
+      } catch (err) {
+        document.getElementById("disruptionsStatus").textContent = "Meldungen konnten nicht geladen werden: " + err.message;
+        console.error(err);
+      }
+      refreshMarkers();
+      setInterval(tick, 1000);
+    })();
+  </script>
+</body>
+</html>

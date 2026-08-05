@@ -1,0 +1,18 @@
+# Betriebssystem
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# Große Rohdaten (GTFS wird nicht eingecheckt – lines.geojson genügt)
+google_transit.zip
+gtfs/
+*.txt.gz
+
+# Logs & temporäre Dateien
+*.log
+tmp/
