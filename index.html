@@ -199,6 +199,34 @@
     .access-no { color: var(--bad); font-weight: 700; }
     .access-na { color: var(--text-dim); font-weight: 700; }
 
+    /* Aufklappbare Meldungen */
+    .acc { border: 1px solid var(--line); border-radius: 10px; margin-bottom: 9px; overflow: hidden; background: var(--surface-2); }
+    .acc > summary { cursor: pointer; padding: 11px 13px; font-size: 13px; font-weight: 700; list-style: none; display: flex; align-items: center; gap: 8px; }
+    .acc > summary::-webkit-details-marker { display: none; }
+    .acc > summary::after { content: "▸"; margin-left: auto; color: var(--text-dim); transition: transform .15s; }
+    .acc[open] > summary::after { transform: rotate(90deg); }
+    .acc > summary:hover { background: rgba(255,255,255,.04); }
+    .acc-count { background: var(--surface-3); color: var(--text-dim); border-radius: 999px; padding: 2px 8px; font-size: 11px; font-weight: 700; }
+    .acc-body { padding: 4px 10px 10px; }
+    .acc-item { border-left: 3px solid var(--warn); background: rgba(251,191,36,.06); border-radius: 8px; margin-bottom: 7px; overflow: hidden; }
+    .acc-item > summary { cursor: pointer; padding: 9px 11px; font-size: 12.5px; font-weight: 650; color: #fcd34d; list-style: none; line-height: 1.45; }
+    .acc-item > summary::-webkit-details-marker { display: none; }
+    .acc-item > summary:hover { background: rgba(251,191,36,.08); }
+    .acc-item .d-valid { color: #d6b25f; font-size: 11px; margin-top: 4px; font-weight: 500; font-variant-numeric: tabular-nums; }
+    .acc-item .d-content { color: #cbd5e1; padding: 0 11px 11px; font-size: 12.5px; line-height: 1.55; }
+    .acc-item .d-content a { color: #fda4af; }
+    .cat-empty { color: var(--text-dim); font-size: 12.5px; padding: 6px 2px 10px; }
+
+    /* Linien-Ansicht */
+    .line-head { display: flex; align-items: center; gap: 11px; margin-bottom: 4px; }
+    .line-head .line-badge { font-size: 16px; min-width: 48px; padding: 7px 9px; }
+    .stop-item { display: flex; align-items: center; gap: 11px; padding: 9px 2px; border-bottom: 1px solid var(--line); cursor: pointer; font-size: 13.5px; }
+    .stop-item:last-child { border-bottom: 0; }
+    .stop-item:hover { background: rgba(255,255,255,.04); }
+    .stop-rail { width: 12px; display: flex; justify-content: center; flex: 0 0 auto; }
+    .stop-node { width: 9px; height: 9px; border-radius: 50%; border: 2px solid var(--surface); }
+    .switch-note { font-size: 10.5px; color: var(--text-dim); padding: 0 8px 7px 49px; margin-top: -5px; line-height: 1.4; }
+
     /* Routen-Auswahl per Klick */
     .pick-box { background: var(--surface-2); border: 1px dashed var(--line); border-radius: var(--r-md); padding: 12px; margin-bottom: 12px; }
     .pick-step { display: flex; align-items: center; gap: 9px; padding: 5px 0; font-size: 13px; }
@@ -229,6 +257,7 @@
         <label class="switch"><input type="checkbox" id="chkStops" checked><span class="sw-dot" style="background:#38bdf8"></span> Haltestellen</label>
         <label class="switch"><input type="checkbox" id="chkAlerts" checked><span class="sw-dot" style="background:#ef4444"></span> Störungen &amp; Baustellen</label>
         <label class="switch"><input type="checkbox" id="chkAccess" checked><span class="sw-dot" style="background:#34d399"></span> Bahnsteige (barrierefrei)</label>
+        <div class="switch-note">Erscheint, sobald eine Haltestelle ausgewählt ist.</div>
       </div>
     </div>
   </div>
@@ -293,6 +322,19 @@
         <div id="subBarr" style="display:none; margin-top:12px;"><div id="stopAccess"></div></div>
       </div>
 
+      <div id="lineView" style="display:none;">
+        <span class="backlink" id="backFromLine">← Zurück zur Karte</span>
+        <div class="line-head">
+          <span id="lineBadge" class="line-badge">–</span>
+          <div>
+            <h2 style="margin:0;">Linienverlauf</h2>
+            <div id="lineStatus" class="muted"></div>
+          </div>
+        </div>
+        <div class="divider"></div>
+        <div id="lineStops"></div>
+      </div>
+
       <div id="tripView" style="display:none;">
         <h2>Verbindung</h2>
         <div class="pick-box" id="pickBox">
@@ -346,16 +388,27 @@
     const accessLayer  = L.layerGroup();   // Bahnsteig-Punkte (Barrierefreiheit)
     const routeLayer   = L.layerGroup().addTo(map); // gezeichnete A→B-Route
     const pickLayer    = L.layerGroup().addTo(map); // Start/Ziel bei Klick-Auswahl
+    const lineFocusLayer = L.layerGroup().addTo(map); // einzelne, hervorgehobene Linie
+    const lineStopsLayer = L.layerGroup().addTo(map); // Haltestellen dieser Linie
 
     let linesReady = false;
+    let lineGeo = null;                 // komplettes GeoJSON, für die Linien-Ansicht
+    const lineStopsIndex = {};          // Liniennummer -> Haltestellen in Fahrtreihenfolge
     fetch("lines.geojson")
       .then(r => r.json())
       .then(gj => {
+        lineGeo = gj;
+        gj.features.forEach(f => {
+          if (f.properties.stops) lineStopsIndex[f.properties.line] = f.properties.stops;
+        });
         const casing = L.geoJSON(gj, { pane: "linesPane", style: () => ({ color: "#e5e7eb", weight: 7, opacity: .5, lineJoin: "round", lineCap: "round" }) });
         const colored = L.geoJSON(gj, {
           pane: "linesPane",
           style: f => ({ color: f.properties.color, weight: 4, opacity: 1, lineJoin: "round", lineCap: "round" }),
-          onEachFeature: (f, l) => l.bindTooltip("Linie " + f.properties.line, { sticky: true })
+          onEachFeature: (f, l) => {
+            l.bindTooltip("Linie " + f.properties.line + " – antippen für alle Haltestellen", { sticky: true });
+            l.on("click", (e) => { L.DomEvent.stopPropagation(e); openLine(f.properties.line); });
+          }
         });
         linesLayer.addLayer(casing); linesLayer.addLayer(colored);
         linesReady = true;
@@ -388,6 +441,8 @@
         if (!on && map.hasLayer(layer)) map.removeLayer(layer);
       };
       if (mapMode === "route") {
+        show(linesLayer, false); show(markersLayer, false); show(alertLayer, false); show(accessLayer, false);
+      } else if (mapMode === "line") {
         show(linesLayer, false); show(markersLayer, false); show(alertLayer, false); show(accessLayer, false);
       } else if (mapMode === "pick") {
         show(linesLayer, false); show(accessLayer, false);
@@ -535,14 +590,29 @@
     }
     const CAT_META = { verspaetung: { label: "Verspätungen", icon: "⏱️" }, stoerung: { label: "Störungen", icon: "⚠️" }, baustelle: { label: "Baustellen", icon: "🚧" } };
     const CAT_ORDER = ["verspaetung", "stoerung", "baustelle"];
-    function renderGroupedDisruptions(infos, compact) {
+    // Eine einzelne Meldung als aufklappbarer Eintrag (Titel sichtbar, Text auf Klick).
+    function disruptionAccItem(info) {
+      const validity = infoValidity(info);
+      const text = infoText(info);
+      const provider = info.properties?.providerCode ? `<div class="muted" style="margin-top:6px; font-size:11px;">Quelle: ${info.properties.providerCode}</div>` : "";
+      const body = (text || infoLinkHtml(info))
+        ? `<div class="d-content">${text}${infoLinkHtml(info)}${provider}</div>`
+        : `<div class="d-content muted">Kein weiterer Text hinterlegt.</div>`;
+      return `<details class="acc-item"><summary>${infoTitle(info)}${validity ? `<div class="d-valid">${validity}</div>` : ""}</summary>${body}</details>`;
+    }
+    // Meldungen nach Kategorie in aufklappbaren Menüs (Verspätungen / Störungen / Baustellen).
+    function renderGroupedDisruptions(infos) {
       const groups = { verspaetung: [], stoerung: [], baustelle: [] };
       infos.forEach(i => groups[infoCategory(i)].push(i));
       let html = "";
       CAT_ORDER.forEach(cat => {
-        const arr = groups[cat]; if (!arr.length) return;
-        html += `<div class="cat-head">${CAT_META[cat].icon} ${CAT_META[cat].label} (${arr.length})</div>`;
-        html += arr.map(compact ? disruptionCompactHtml : disruptionHtml).join("");
+        const arr = groups[cat];
+        const m = CAT_META[cat];
+        if (!arr.length) {
+          html += `<details class="acc"><summary>${m.icon} ${m.label}<span class="acc-count">0</span></summary><div class="acc-body"><div class="cat-empty">Aktuell keine Meldungen in dieser Kategorie.</div></div></details>`;
+          return;
+        }
+        html += `<details class="acc"><summary>${m.icon} ${m.label}<span class="acc-count">${arr.length}</span></summary><div class="acc-body">${arr.map(disruptionAccItem).join("")}</div></details>`;
       });
       return html;
     }
@@ -577,7 +647,7 @@
       else openStop(stop);
     }
     function refreshMarkers() {
-      if (mapMode === "route") return;
+      if (mapMode === "route" || mapMode === "line") return;
       const zoom = map.getZoom();
       if (zoom < 13) {
         markersLayer.clearLayers(); alertLayer.clearLayers();
@@ -618,9 +688,85 @@
     // ---------- Panel ----------
     function showPanel(view) {
       panelView = view;
-      document.getElementById("disruptionsView").style.display = (view === "list" && currentMode === "map") ? "block" : "none";
-      document.getElementById("stopView").style.display = (view === "stop" && currentMode === "map") ? "block" : "none";
+      const onMap = currentMode === "map";
+      document.getElementById("disruptionsView").style.display = (view === "list" && onMap) ? "block" : "none";
+      document.getElementById("stopView").style.display = (view === "stop" && onMap) ? "block" : "none";
+      document.getElementById("lineView").style.display = (view === "line" && onMap) ? "block" : "none";
       document.getElementById("tripView").style.display = (currentMode === "trip") ? "block" : "none";
+    }
+
+    // ---------- Linien-Ansicht: alle Haltestellen einer Linie isoliert ----------
+    function openLine(line) {
+      const stops = lineStopsIndex[line] || [];
+      const s = lineStyle(line);
+      mapMode = "line";
+      applyMapLayers();
+      lineFocusLayer.clearLayers(); lineStopsLayer.clearLayers();
+      routeLayer.clearLayers(); accessLayer.clearLayers();
+
+      // Nur diese Linie zeichnen
+      const feats = (lineGeo?.features || []).filter(f => f.properties.line === line);
+      const all = [];
+      feats.forEach(f => {
+        const pts = f.geometry.coordinates.map(([lo, la]) => [la, lo]);
+        all.push(...pts);
+        L.polyline(pts, { color: "#0a0f1a", weight: 11, opacity: .85 }).addTo(lineFocusLayer);
+        L.polyline(pts, { color: s.bg, weight: 6, opacity: 1, lineJoin: "round", lineCap: "round" }).addTo(lineFocusLayer);
+      });
+      // Haltestellen als Punkte
+      stops.forEach((st, i) => {
+        const isEnd = i === 0 || i === stops.length - 1;
+        const m = L.circleMarker(st.c, {
+          radius: isEnd ? 8 : 5.5, fillColor: isEnd ? s.bg : "#e5e7eb",
+          color: "#0a0f1a", weight: 2.5, fillOpacity: 1
+        }).addTo(lineStopsLayer).bindTooltip(st.n, { direction: "top" });
+        m.on("click", (e) => { L.DomEvent.stopPropagation(e); openStopByName(st.n, st.c); });
+      });
+
+      // Panel füllen
+      const badge = document.getElementById("lineBadge");
+      badge.textContent = line; badge.style.background = s.bg; badge.style.color = s.fg;
+      document.getElementById("lineStatus").textContent = stops.length
+        ? `${stops.length} Haltestellen · ${stops[0].n} ↔ ${stops[stops.length - 1].n}`
+        : "Keine Haltestellendaten vorhanden.";
+      document.getElementById("lineStops").innerHTML = stops.map(st =>
+        `<div class="stop-item" data-name="${st.n.replace(/"/g, "&quot;")}" data-lat="${st.c[0]}" data-lon="${st.c[1]}">
+           <span class="stop-rail"><span class="stop-node" style="background:${s.bg};"></span></span>
+           <span>${st.n}</span>
+         </div>`).join("");
+      document.querySelectorAll("#lineStops .stop-item").forEach(el => {
+        el.addEventListener("click", () => openStopByName(el.dataset.name, [parseFloat(el.dataset.lat), parseFloat(el.dataset.lon)]));
+      });
+
+      showPanel("line"); expandSheet();
+      if (all.length) {
+        const visible = sheet.getBoundingClientRect().height - currentOffset;
+        map.fitBounds(L.latLngBounds(all), { paddingTopLeft: [40, 70], paddingBottomRight: [40, visible + 20] });
+      }
+    }
+    function closeLine() {
+      lineFocusLayer.clearLayers(); lineStopsLayer.clearLayers();
+      mapMode = "browse"; applyMapLayers(); refreshMarkers();
+      showPanel(currentStop ? "stop" : "list");
+    }
+    // Öffnet eine Haltestelle, die nur über Name/Koordinate bekannt ist (aus der Linien-Ansicht).
+    async function openStopByName(name, coord) {
+      try {
+        const stops = await searchStops(name);
+        let best = stops[0];
+        if (coord && stops.length) {
+          const d = (s) => {
+            const p = normalizeCoord(s.coord);
+            return p ? Math.hypot(p[0] - coord[0], p[1] - coord[1]) : 9;
+          };
+          best = stops.slice(0, 6).sort((a, b) => d(a) - d(b))[0];
+        }
+        if (!best) return;
+        lineFocusLayer.clearLayers(); lineStopsLayer.clearLayers();
+        mapMode = "browse"; applyMapLayers();
+        await openStop(best);
+        refreshMarkers();
+      } catch (e) { console.error(e); }
     }
     function isKARelevant(info) {
       if (info.properties?.providerCode === "KVV") return true;
@@ -637,7 +783,7 @@
       list.sort((a, b) => (PRIO_RANK[a.priority] ?? 9) - (PRIO_RANK[b.priority] ?? 9));
       lastMeldungenCount = list.length;
       status.innerHTML = `Tippe eine Haltestelle auf der Karte an.<br><span style="color:var(--bad); font-weight:600;">Rot</span> = Störung oder Baustelle.`;
-      box.innerHTML = renderGroupedDisruptions(list.slice(0, 50), true);
+      box.innerHTML = renderGroupedDisruptions(list.slice(0, 60));
       btn.style.display = list.length ? "inline-block" : "none";
       btn.textContent = meldungenVisible ? "Meldungen ausblenden" : `Alle Meldungen anzeigen (${list.length})`;
     }
@@ -745,7 +891,7 @@
         }).join("");
         const stopInfos = collectInfos([].concat(...events.map(ev => ev.infos || []), disruptionsForStop(currentStop)));
         document.getElementById("stopDisruptions").innerHTML = stopInfos.length
-          ? renderGroupedDisruptions(stopInfos, false)
+          ? renderGroupedDisruptions(stopInfos)
           : `<div class="empty"><span class="big">✅</span>Keine aktuellen Störungen oder Baustellen an dieser Haltestelle.</div>`;
         const stoerTab = document.querySelector('.subtab[data-sub="stoer"]');
         if (stoerTab) stoerTab.textContent = stopInfos.length ? `Meldungen (${stopInfos.length})` : "Meldungen";
@@ -958,8 +1104,10 @@
       document.getElementById("tripControls").style.display = mode === "trip" ? "block" : "none";
       if (mode === "map") {
         routeLayer.clearLayers(); pickLayer.clearLayers();
+        lineFocusLayer.clearLayers(); lineStopsLayer.clearLayers();
         mapMode = "browse"; applyMapLayers(); refreshMarkers();
       } else {
+        lineFocusLayer.clearLayers(); lineStopsLayer.clearLayers();
         mapMode = "pick"; applyMapLayers(); refreshMarkers();
         if (!document.getElementById("tripStatus").textContent)
           document.getElementById("tripStatus").textContent = "Tippe zuerst den Start auf der Karte an.";
@@ -1019,6 +1167,7 @@
     document.getElementById("toInput").addEventListener("keydown", e => { if (e.key === "Enter") { handleTrip(); expandSheet(); } });
     document.getElementById("pickReset").addEventListener("click", resetPick);
     document.getElementById("backToList").addEventListener("click", () => { currentStop = null; accessLayer.clearLayers(); showPanel("list"); });
+    document.getElementById("backFromLine").addEventListener("click", closeLine);
     document.getElementById("toggleMeldungen").addEventListener("click", () => {
       meldungenVisible = !meldungenVisible;
       document.getElementById("networkDisruptions").style.display = meldungenVisible ? "block" : "none";
