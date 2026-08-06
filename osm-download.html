@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OSM-Gleisverläufe herunterladen</title>
+  <style>
+    body { font-family: system-ui, Arial, sans-serif; background: #0f172a; color: #e5e7eb; margin: 0; padding: 40px 20px; display: flex; justify-content: center; }
+    .box { max-width: 560px; width: 100%; }
+    h1 { font-size: 21px; margin: 0 0 6px; }
+    p { color: #94a3b8; font-size: 14px; line-height: 1.6; }
+    button { margin-top: 18px; padding: 13px 22px; font-size: 15px; font-weight: 600; border: 0; border-radius: 10px; background: #f43f5e; color: #fff; cursor: pointer; }
+    button:hover { background: #be123c; }
+    button:disabled { background: #475569; cursor: default; }
+    #log { margin-top: 20px; background: #1e293b; border: 1px solid #334155; border-radius: 10px; padding: 14px; font-size: 13px; white-space: pre-wrap; min-height: 60px; line-height: 1.6; }
+    .ok { color: #34d399; } .err { color: #f87171; }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h1>Gleisverläufe aus OpenStreetMap holen</h1>
+    <p>Diese Seite lädt die echten Linienverläufe der Karlsruher Straßen- und Stadtbahnen
+       (Route-Relationen aus OpenStreetMap) und speichert sie als Datei.
+       Die Abfrage kann ein bis zwei Minuten dauern.</p>
+    <button id="go">Daten laden und speichern</button>
+    <div id="log">Bereit.</div>
+  </div>
+
+  <script>
+    const MIRRORS = [
+      "https://overpass-api.de/api/interpreter",
+      "https://overpass.kumi.systems/api/interpreter",
+      "https://overpass.private.coffee/api/interpreter"
+    ];
+    // Route-Relationen (Tram / Stadtbahn) im Raum Karlsruhe, inklusive Geometrie der Wege.
+    const QUERY = `[out:json][timeout:300];
+relation["type"="route"]["route"~"^(tram|light_rail)$"](48.88,8.30,49.10,8.53);
+out body geom;`;
+
+    const log = (msg, cls) => {
+      const el = document.getElementById("log");
+      el.innerHTML += `\n<span class="${cls || ""}">${msg}</span>`;
+    };
+
+    document.getElementById("go").addEventListener("click", async () => {
+      const btn = document.getElementById("go");
+      btn.disabled = true;
+      document.getElementById("log").textContent = "Frage OpenStreetMap ab … (bitte warten)";
+      for (const url of MIRRORS) {
+        try {
+          log("→ versuche " + new URL(url).hostname + " …");
+          const t0 = Date.now();
+          const res = await fetch(url, { method: "POST", body: "data=" + encodeURIComponent(QUERY) });
+          if (!res.ok) throw new Error("HTTP " + res.status);
+          const text = await res.text();
+          const data = JSON.parse(text);
+          const n = (data.elements || []).length;
+          if (!n) throw new Error("keine Daten erhalten");
+          log(`✓ ${n} Relationen in ${Math.round((Date.now() - t0) / 1000)} s, ${(text.length / 1048576).toFixed(1)} MB`, "ok");
+          const blob = new Blob([text], { type: "application/json" });
+          const a = document.createElement("a");
+          a.href = URL.createObjectURL(blob);
+          a.download = "osm-routes.json";
+          a.click();
+          log("✓ Datei osm-routes.json wurde gespeichert. Diese Datei bitte an Claude schicken.", "ok");
+          btn.disabled = false;
+          return;
+        } catch (e) {
+          log("✗ " + e.message, "err");
+        }
+      }
+      log("Alle Server haben abgelehnt. Bitte in ein paar Minuten erneut versuchen.", "err");
+      btn.disabled = false;
+    });
+  </script>
+</body>
+</html>
