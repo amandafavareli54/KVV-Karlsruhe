@@ -133,6 +133,15 @@
     @media (min-width: 940px) {
       #sheet { left: auto; right: 16px; bottom: 16px; width: 430px; height: 84vh; border-radius: var(--r-lg); border: 1px solid var(--line); }
     }
+    /* Beim Tippen auf dem Handy: Panel oben andocken, damit die Tastatur nichts verdeckt. */
+    @media (max-width: 939px) {
+      #sheet.typing {
+        top: 0; bottom: auto; height: 100%; height: 100dvh;
+        border-radius: 0; transform: none !important; transition: none !important;
+      }
+      #sheet.typing #handle { display: none; }
+      #sheet.typing #sheetHeader { padding-top: 14px; }
+    }
     #handle { padding: 9px 0 5px; display: flex; justify-content: center; cursor: grab; flex: 0 0 auto; }
     #handle:active { cursor: grabbing; }
     .grabber { width: 42px; height: 4px; border-radius: 3px; background: var(--text-dim); opacity: .5; }
@@ -541,6 +550,10 @@
         show(linesLayer, false); show(markersLayer, false); show(alertLayer, false); show(accessLayer, false);
       } else if (mapMode === "line") {
         show(linesLayer, false); show(markersLayer, false); show(alertLayer, false); show(accessLayer, false);
+      } else if (mapMode === "stopfocus") {
+        // Nur die gewählte Haltestelle: alles andere ausblenden.
+        show(linesLayer, false); show(markersLayer, false); show(alertLayer, false);
+        show(accessLayer, layerVis.access);   // Bahnsteige gehören zur Haltestelle
       } else if (mapMode === "pick") {
         show(linesLayer, false); show(accessLayer, false);
         show(markersLayer, layerVis.stops); show(alertLayer, layerVis.alerts);
@@ -744,7 +757,7 @@
       else openStop(stop);
     }
     function refreshMarkers() {
-      if (mapMode === "route" || mapMode === "line") return;
+      if (mapMode === "route" || mapMode === "line" || mapMode === "stopfocus") return;
       const zoom = map.getZoom();
       if (zoom < 13) {
         markersLayer.clearLayers(); alertLayer.clearLayers();
@@ -844,6 +857,7 @@
     // ---------- Linien-Ansicht: alle Haltestellen einer Linie isoliert ----------
     function openLine(line, clickLatLng) {
       stopLive();
+      focusLayer.clearLayers(); focusMarker = null;
       veh.line = line;
       const allStops = lineStopsIndex[line] || [];
       const inKA = allStops.filter(st => st.k);
@@ -1200,22 +1214,24 @@
     }
     // Hebt eine einzelne Haltestelle hervor (nach der Suche), damit klar ist, wo sie liegt.
     const focusLayer = L.layerGroup().addTo(map);
-    function focusStop(stop) {
-      focusLayer.clearLayers();
+    let focusMarker = null;
+    function focusStop(stop, zoom) {
+      focusLayer.clearLayers(); focusMarker = null;
       const p = normalizeCoord(stop.coord);
       if (!p) return;
-      const s = lineStyle("");
       L.circleMarker(p, { radius: 18, fillColor: cssVar("--brand"), color: cssVar("--brand"), weight: 2, opacity: .5, fillOpacity: .15 }).addTo(focusLayer);
-      L.circleMarker(p, { radius: 9, fillColor: cssVar("--brand"), color: cssVar("--stroke"), weight: 3, fillOpacity: 1 })
-        .addTo(focusLayer).bindTooltip(shortName(stop.name), { direction: "top", permanent: true, className: "" }).openTooltip();
-      map.setView(p, Math.max(map.getZoom(), 17));
+      focusMarker = L.circleMarker(p, { radius: 9, fillColor: cssVar("--brand"), color: cssVar("--stroke"), weight: 3, fillOpacity: 1 })
+        .addTo(focusLayer).bindTooltip(shortName(stop.name), { direction: "top", permanent: true }).openTooltip();
+      if (zoom) map.setView(p, Math.max(map.getZoom(), 17));
+      else map.panTo(p);
     }
     async function openStop(stop, opts) {
       currentStop = stop;
       stopCache[stop.id] = stop;
-      focusLayer.clearLayers();
-      if (opts && opts.focus) focusStop(stop);
-      else map.panTo(normalizeCoord(stop.coord) || FALLBACK_COORD);
+      // Nur diese Haltestelle zeigen, alle anderen ausblenden.
+      mapMode = "stopfocus";
+      applyMapLayers();
+      focusStop(stop, !!(opts && opts.focus));
       document.getElementById("stopTitle").textContent = shortName(stop.name);
       document.getElementById("stopStatus").innerHTML = `<span class="spinner"></span>Lade Abfahrten …`;
       document.getElementById("stopDepartures").innerHTML = "";
@@ -1245,7 +1261,10 @@
           : `<div class="empty"><span class="big">✅</span>Keine aktuellen Störungen oder Baustellen an dieser Haltestelle.</div>`;
         const stoerTab = document.querySelector('.subtab[data-sub="stoer"]');
         if (stoerTab) stoerTab.textContent = stopInfos.length ? `Meldungen (${stopInfos.length})` : "Meldungen";
-        if (stopInfos.length) markStopDisrupted(currentStop.id);
+        if (stopInfos.length) {
+          markStopDisrupted(currentStop.id);
+          if (focusMarker) focusMarker.setStyle({ fillColor: MARK_ALERT });
+        }
         lastUpdate = new Date(); lastCount = events.length;
         document.getElementById("stopStatus").textContent = `${lastCount} Abfahrten · aktualisiert ${fmtTime(lastUpdate.toISOString())} · nächste in ${secondsLeft}s`;
       } catch (err) {
@@ -1444,12 +1463,15 @@
       });
       input.addEventListener("focus", () => {
         typing = true;
-        expandSheet();
-        // Panelinhalt nach oben, damit das Feld und die Vorschläge sichtbar bleiben
+        if (hasMouse) expandSheet();
+        else sheet.classList.add("typing");   // Handy: Panel oben andocken
         setTimeout(() => { document.getElementById("sheetBody").scrollTop = 0; }, 50);
       });
       input.addEventListener("blur", () => setTimeout(() => {
         typing = false;
+        sheet.classList.remove("typing");
+        sheet.style.bottom = "";
+        measureSheet(); applySheet(false);
         box.style.display = "none";
       }, 200));
     }
@@ -1462,11 +1484,13 @@
       document.getElementById("tripControls").style.display = mode === "trip" ? "block" : "none";
       if (mode === "map") {
         stopLive();
+        focusLayer.clearLayers(); focusMarker = null;
         routeLayer.clearLayers(); pickLayer.clearLayers();
         lineFocusLayer.clearLayers(); lineStopsLayer.clearLayers();
         mapMode = "browse"; applyMapLayers(); refreshMarkers();
       } else {
         stopLive();
+        focusLayer.clearLayers(); focusMarker = null;
         lineFocusLayer.clearLayers(); lineStopsLayer.clearLayers();
         mapMode = "pick"; applyMapLayers(); refreshMarkers();
         if (!document.getElementById("tripStatus").textContent)
@@ -1521,6 +1545,7 @@
     if (window.visualViewport) {
       const vv = window.visualViewport;
       vv.addEventListener("resize", () => {
+        if (sheet.classList.contains("typing")) return;   // oben angedockt, nichts verschieben
         const keyboard = window.innerHeight - vv.height;
         sheet.style.bottom = keyboard > 120 ? keyboard + "px" : "";
         measureSheet();
@@ -1555,7 +1580,12 @@
     document.getElementById("tripBtn").addEventListener("click", () => { handleTrip(); expandSheet(); });
     document.getElementById("toInput").addEventListener("keydown", e => { if (e.key === "Enter") { handleTrip(); expandSheet(); } });
     document.getElementById("pickReset").addEventListener("click", resetPick);
-    document.getElementById("backToList").addEventListener("click", () => { currentStop = null; accessLayer.clearLayers(); focusLayer.clearLayers(); showPanel("list"); });
+    document.getElementById("backToList").addEventListener("click", () => {
+      currentStop = null;
+      accessLayer.clearLayers(); focusLayer.clearLayers(); focusMarker = null;
+      mapMode = "browse"; applyMapLayers(); refreshMarkers();
+      showPanel("list");
+    });
     document.getElementById("backFromLine").addEventListener("click", closeLine);
     document.getElementById("liveBtn").addEventListener("click", () => { veh.running ? stopLive() : startLive(); });
     document.getElementById("toggleMeldungen").addEventListener("click", () => {
