@@ -128,7 +128,7 @@
       position: fixed; left: 0; right: 0; bottom: 0; height: 76vh; z-index: 1100;
       background: var(--surface); border-radius: var(--r-lg) var(--r-lg) 0 0;
       box-shadow: 0 -14px 44px rgba(0,0,0,.28); border-top: 1px solid var(--line);
-      display: flex; flex-direction: column; will-change: transform; touch-action: none;
+      display: flex; flex-direction: column; will-change: transform; touch-action: auto;
     }
     @media (min-width: 940px) {
       #sheet { left: auto; right: 16px; bottom: 16px; width: 430px; height: 84vh; border-radius: var(--r-lg); border: 1px solid var(--line); }
@@ -142,7 +142,10 @@
       #sheet.typing #handle { display: none; }
       #sheet.typing #sheetHeader { padding-top: 14px; }
     }
-    #handle { padding: 9px 0 5px; display: flex; justify-content: center; cursor: grab; flex: 0 0 auto; }
+    #handle { padding: 12px 0 8px; display: flex; justify-content: center; cursor: grab; flex: 0 0 auto; touch-action: none; }
+    #sheetHeader { touch-action: none; }
+    #sheetBody { touch-action: pan-y; overscroll-behavior: contain; }
+    body.typing .map-stack { display: none; }   /* Panels verdecken die Suche nicht */
     #handle:active { cursor: grabbing; }
     .grabber { width: 42px; height: 4px; border-radius: 3px; background: var(--text-dim); opacity: .5; }
 
@@ -799,6 +802,8 @@
     function showPanel(view) {
       panelView = view;
       const onMap = currentMode === "map";
+      // Suchfeld nur in der Übersicht – bei ausgewählter Haltestelle/Linie stört es nur.
+      document.getElementById("mapControls").style.display = (onMap && view === "list") ? "flex" : "none";
       document.getElementById("disruptionsView").style.display = (view === "list" && onMap) ? "block" : "none";
       document.getElementById("stopView").style.display = (view === "stop" && onMap) ? "block" : "none";
       document.getElementById("lineView").style.display = (view === "line" && onMap) ? "block" : "none";
@@ -1239,7 +1244,7 @@
       document.getElementById("stopLines").innerHTML = "";
       document.getElementById("stopAccess").innerHTML = "";
       accessLayer.clearLayers();
-      setSubTab("dep"); showPanel("stop"); expandSheet();
+      setSubTab("dep"); showPanel("stop");
       secondsLeft = REFRESH_SECONDS;
       loadAccessibility(stop);
       await loadStopDepartures();
@@ -1464,12 +1469,13 @@
       input.addEventListener("focus", () => {
         typing = true;
         if (hasMouse) expandSheet();
-        else sheet.classList.add("typing");   // Handy: Panel oben andocken
+        else { sheet.classList.add("typing"); document.body.classList.add("typing"); }
         setTimeout(() => { document.getElementById("sheetBody").scrollTop = 0; }, 50);
       });
       input.addEventListener("blur", () => setTimeout(() => {
         typing = false;
         sheet.classList.remove("typing");
+        document.body.classList.remove("typing");
         sheet.style.bottom = "";
         measureSheet(); applySheet(false);
         box.style.display = "none";
@@ -1480,7 +1486,6 @@
     function switchMode(mode) {
       currentMode = mode;
       document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t.dataset.mode === mode));
-      document.getElementById("mapControls").style.display = mode === "map" ? "flex" : "none";
       document.getElementById("tripControls").style.display = mode === "trip" ? "block" : "none";
       if (mode === "map") {
         stopLive();
@@ -1522,20 +1527,40 @@
     function expandSheet() { sheetExpanded = true; measureSheet(); applySheet(true); }
     function collapseSheet() { sheetExpanded = false; measureSheet(); applySheet(true); }
 
-    handle.addEventListener("pointerdown", (e) => {
-      dragging = true; moved = 0; startY = e.clientY; measureSheet(); startOffset = currentOffset;
-      try { handle.setPointerCapture(e.pointerId); } catch (_) {}
-      sheet.style.transition = "none"; e.preventDefault();
+    // Ziehen von überall im Panel: Griff, Kopfbereich und Inhalt (solange dieser oben steht).
+    let pending = false, tapCandidate = false;
+    const sheetBodyEl = () => document.getElementById("sheetBody");
+    sheet.addEventListener("pointerdown", (e) => {
+      if (sheet.classList.contains("typing")) return;
+      if (e.target.closest("input, button, a, summary, label, .suggestion, .stop-item, .line-pick")) return;
+      const body = sheetBodyEl();
+      const inBody = body.contains(e.target);
+      if (inBody && sheetExpanded && body.scrollTop > 0) return;   // Inhalt scrollen lassen
+      measureSheet(); startY = e.clientY; startOffset = currentOffset; moved = 0;
+      tapCandidate = !inBody;            // Tippen zum Umschalten nur außerhalb des Inhalts
+      if (inBody) { pending = true; dragging = false; }  // Richtung erst abwarten
+      else { pending = false; dragging = true; sheet.style.transition = "none"; }
+      try { sheet.setPointerCapture(e.pointerId); } catch (_) {}
     });
     window.addEventListener("pointermove", (e) => {
+      const dy = e.clientY - startY;
+      if (pending) {
+        if (Math.abs(dy) < 8) return;
+        // Im Inhalt: nach unten ziehen schließt, nach oben scrollt normal weiter
+        if (dy > 0) { pending = false; dragging = true; sheet.style.transition = "none"; }
+        else { pending = false; return; }
+      }
       if (!dragging) return;
-      const dy = e.clientY - startY; moved = Math.max(moved, Math.abs(dy));
+      moved = Math.max(moved, Math.abs(dy));
       setOffset(startOffset + dy, false);
-    });
+      e.preventDefault();
+    }, { passive: false });
     window.addEventListener("pointerup", () => {
-      if (!dragging) return; dragging = false;
-      if (moved < 6) sheetExpanded = !sheetExpanded;
-      else sheetExpanded = currentOffset < maxOffset / 2;
+      pending = false;
+      if (!dragging) return;
+      dragging = false;
+      if (moved < 6 && tapCandidate) sheetExpanded = !sheetExpanded;
+      else if (moved >= 6) sheetExpanded = currentOffset < maxOffset / 2;
       applySheet(true);
     });
     window.addEventListener("resize", () => { measureSheet(); applySheet(false); });
