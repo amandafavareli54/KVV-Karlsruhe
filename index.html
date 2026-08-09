@@ -307,7 +307,7 @@
       <button id="themeBtn" class="theme-btn" title="Hell / Dunkel umschalten">🌙</button>
     </div>
 
-    <div class="panel-card" id="linePanel">
+    <div class="panel-card collapsed" id="linePanel">
       <button class="panel-head" id="linePanelToggle">
         <span>Linie auswählen</span><span class="chev">▾</span>
       </button>
@@ -316,7 +316,7 @@
       </div>
     </div>
 
-    <div class="panel-card" id="layerPanel">
+    <div class="panel-card collapsed" id="layerPanel">
       <button class="panel-head" id="layerToggle">
         <span>Ebenen</span><span class="chev">▾</span>
       </button>
@@ -1442,8 +1442,16 @@
           } catch (e) { box.style.display = "none"; }
         }, 250);
       });
-      input.addEventListener("focus", expandSheet);
-      input.addEventListener("blur", () => setTimeout(() => { box.style.display = "none"; }, 150));
+      input.addEventListener("focus", () => {
+        typing = true;
+        expandSheet();
+        // Panelinhalt nach oben, damit das Feld und die Vorschläge sichtbar bleiben
+        setTimeout(() => { document.getElementById("sheetBody").scrollTop = 0; }, 50);
+      });
+      input.addEventListener("blur", () => setTimeout(() => {
+        typing = false;
+        box.style.display = "none";
+      }, 200));
     }
 
     // ---------- Modus ----------
@@ -1474,6 +1482,7 @@
     const handle = document.getElementById("handle");
     const sheetHeader = document.getElementById("sheetHeader");
     let maxOffset = 0, currentOffset = 0, sheetExpanded = false, dragging = false, startY = 0, startOffset = 0, moved = 0;
+    let typing = false;   // true, solange ein Eingabefeld im Panel den Fokus hat
 
     function measureSheet() {
       const sh = sheet.getBoundingClientRect().height;
@@ -1506,8 +1515,36 @@
       applySheet(true);
     });
     window.addEventListener("resize", () => { measureSheet(); applySheet(false); });
-    sheet.addEventListener("mouseenter", () => { if (!dragging) expandSheet(); });
-    sheet.addEventListener("mouseleave", () => { if (!dragging && !sheet.contains(document.activeElement)) collapseSheet(); });
+
+    // Auf dem Handy: Panel über die eingeblendete Tastatur schieben, damit das
+    // Eingabefeld sichtbar bleibt.
+    if (window.visualViewport) {
+      const vv = window.visualViewport;
+      vv.addEventListener("resize", () => {
+        const keyboard = window.innerHeight - vv.height;
+        sheet.style.bottom = keyboard > 120 ? keyboard + "px" : "";
+        measureSheet();
+        applySheet(false);
+      });
+    }
+    // Nur auf Geräten mit echter Maus: Panel hebt sich beim Überfahren.
+    // Auf Touchscreens würden mouseenter/mouseleave beim Tippen auslösen.
+    const hasMouse = window.matchMedia("(hover: hover) and (pointer: fine)").matches;
+    let hoverTimer = null;
+    if (hasMouse) {
+      sheet.addEventListener("mouseenter", () => {
+        clearTimeout(hoverTimer);
+        if (!dragging) expandSheet();
+      });
+      sheet.addEventListener("mouseleave", () => {
+        clearTimeout(hoverTimer);
+        // kurze Verzögerung, damit ein knapp verlassener Rand nicht sofort zuklappt
+        hoverTimer = setTimeout(() => {
+          if (dragging || typing || sheet.contains(document.activeElement)) return;
+          collapseSheet();
+        }, 450);
+      });
+    }
 
     // ---------- Verdrahtung ----------
     attachAutocomplete(document.getElementById("stopInput"), document.getElementById("stopSuggestions"), (s) => openStop(s, { focus: true }));
