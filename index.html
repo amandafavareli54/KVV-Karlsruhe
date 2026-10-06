@@ -90,7 +90,13 @@
     .back-fab:hover { background: var(--brand-dark); }
     /* Panels dürfen nie so hoch werden, dass sie das untere Panel verdecken */
     .panel-body { max-height: 38vh; overflow-y: auto; }
-    @media (max-width: 939px) { .map-stack { max-height: calc(100% - 210px); } }
+    @media (max-width: 939px) {
+      .map-stack { max-height: calc(100% - 210px); }
+      /* Bei geöffnetem Panel nur den Zurück-Knopf stehen lassen,
+         damit Marke und Ebenen-Panels den Inhalt nicht überdecken. */
+      body.sheet-open .brand,
+      body.sheet-open .panel-card { display: none; }
+    }
 
     .brand {
       display: flex; align-items: center; gap: 10px;
@@ -946,6 +952,9 @@
 
       renderLineMeldungen(line);
       markLinePanel(line);
+      // Ebenen- und Linienpanel schließen, damit der Linienverlauf lesbar bleibt
+      document.getElementById("layerPanel").classList.add("collapsed");
+      document.getElementById("linePanel").classList.add("collapsed");
       showPanel("line"); expandSheet();
       if (all.length) {
         const visible = sheet.getBoundingClientRect().height - currentOffset;
@@ -1560,7 +1569,10 @@
       sheet.style.transition = animate ? "transform .28s cubic-bezier(.4,0,.2,1)" : "none";
       sheet.style.transform = `translateY(${currentOffset}px)`;
     }
-    function applySheet(animate) { setOffset(sheetExpanded ? 0 : maxOffset, animate); }
+    function applySheet(animate) {
+      setOffset(sheetExpanded ? 0 : maxOffset, animate);
+      document.body.classList.toggle("sheet-open", sheetExpanded);
+    }
     function expandSheet() { sheetExpanded = true; measureSheet(); applySheet(true); }
     function collapseSheet() { sheetExpanded = false; measureSheet(); applySheet(true); }
 
