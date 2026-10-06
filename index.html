@@ -75,6 +75,10 @@
     ::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
 
     #map { position: fixed; inset: 0; z-index: 0; background: var(--bg); }
+    /* Dunkles Kartenbild aus den hellen OSM-Kacheln erzeugen (kein API-Key nötig) */
+    html:not([data-theme="light"]) .leaflet-tile-pane {
+      filter: invert(1) hue-rotate(180deg) brightness(.82) contrast(1.05) saturate(.35);
+    }
 
     /* ---------- Karten-Overlays ---------- */
     .map-stack { position: fixed; top: 14px; left: 14px; z-index: 1200; display: flex; flex-direction: column; gap: 10px; max-width: 260px; }
@@ -462,20 +466,18 @@
 
     // ---------- Karte ----------
     const map = L.map("map", { zoomControl: false }).setView(KA_CENTER, 15);
-    const TILES = {
-      dark: "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
-      light: "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
-    };
+    // OpenStreetMap-Kacheln: frei nutzbar, ohne API-Key.
+    // Der Dunkelmodus entsteht per CSS-Filter auf .leaflet-tile-pane.
+    const TILE_URL = "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
+    const TILE_ATTR = "© OpenStreetMap-Mitwirkende";
     let theme = "dark";
-    let tileLayer = L.tileLayer(TILES.dark, { maxZoom: 20, attribution: "© OpenStreetMap, © CARTO" }).addTo(map);
+    let tileLayer = L.tileLayer(TILE_URL, { maxZoom: 19, attribution: TILE_ATTR }).addTo(map);
     L.control.zoom({ position: "topright" }).addTo(map);
     function cssVar(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
     function setTheme(t) {
       theme = t;
       document.documentElement.setAttribute("data-theme", t === "light" ? "light" : "dark");
-      map.removeLayer(tileLayer);
-      tileLayer = L.tileLayer(TILES[t], { maxZoom: 20, attribution: "© OpenStreetMap, © CARTO" }).addTo(map);
-      tileLayer.bringToBack();
+      // Die Kacheln bleiben dieselben – nur der CSS-Filter wechselt.
       document.getElementById("themeBtn").textContent = t === "light" ? "☀️" : "🌙";
       restyleLines();
       refreshMarkers();
@@ -1662,6 +1664,7 @@
 
     // ---------- Start ----------
     (async function init() {
+      document.documentElement.setAttribute("data-theme", "dark");
       map.invalidateSize();
       measureSheet(); collapseSheet();
       applyMapLayers();
