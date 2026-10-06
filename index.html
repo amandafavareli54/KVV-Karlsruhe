@@ -82,6 +82,15 @@
 
     /* ---------- Karten-Overlays ---------- */
     .map-stack { position: fixed; top: 14px; left: 14px; z-index: 1200; display: flex; flex-direction: column; gap: 10px; max-width: 260px; }
+    .back-fab {
+      align-self: flex-start; background: var(--brand); color: #fff; border: 0;
+      border-radius: 999px; padding: 11px 18px; font-size: 13.5px; font-weight: 700;
+      cursor: pointer; box-shadow: var(--shadow);
+    }
+    .back-fab:hover { background: var(--brand-dark); }
+    /* Panels dürfen nie so hoch werden, dass sie das untere Panel verdecken */
+    .panel-body { max-height: 38vh; overflow-y: auto; }
+    @media (max-width: 939px) { .map-stack { max-height: calc(100% - 210px); } }
 
     .brand {
       display: flex; align-items: center; gap: 10px;
@@ -314,6 +323,8 @@
   <div id="map"></div>
 
   <div class="map-stack">
+    <button id="backBtn" class="back-fab" style="display:none;">← Übersicht</button>
+
     <div class="brand">
       <span class="brand-mark">🚋</span>
       <span class="brand-txt">
@@ -800,6 +811,29 @@
       rec.disrupted = true;
     }
 
+    // ---------- Zurück zur Übersicht ----------
+    // Zeigt den Zurück-Knopf, sobald etwas isoliert dargestellt wird.
+    function updateBackBtn() {
+      const b = document.getElementById("backBtn");
+      if (b) b.style.display = (currentMode === "trip" || mapMode !== "browse") ? "block" : "none";
+    }
+    // Setzt die Karte auf die normale Übersicht zurück (Haltestellen + Liniennetz).
+    function resetToBrowse() {
+      stopLive();
+      currentStop = null;
+      pickFrom = null; pickTo = null;
+      focusLayer.clearLayers(); focusMarker = null;
+      lineFocusLayer.clearLayers(); lineStopsLayer.clearLayers();
+      routeLayer.clearLayers(); pickLayer.clearLayers(); accessLayer.clearLayers();
+      markLinePanel(null);
+      if (currentMode !== "map") {
+        switchMode("map");                 // wechselt Tab und stellt die Ebenen wieder her
+      } else {
+        mapMode = "browse"; applyMapLayers(); refreshMarkers(); showPanel("list");
+      }
+      updateBackBtn();
+    }
+
     // ---------- Panel ----------
     function showPanel(view) {
       panelView = view;
@@ -810,6 +844,7 @@
       document.getElementById("stopView").style.display = (view === "stop" && onMap) ? "block" : "none";
       document.getElementById("lineView").style.display = (view === "line" && onMap) ? "block" : "none";
       document.getElementById("tripView").style.display = (currentMode === "trip") ? "block" : "none";
+      updateBackBtn();
     }
 
     // Panel mit allen Linien – Klicken ist zuverlässiger als das Treffen einer Linie auf der Karte.
@@ -1295,7 +1330,7 @@
     }
     function drawJourney(journey) {
       routeLayer.clearLayers();
-      mapMode = "route"; applyMapLayers();
+      mapMode = "route"; applyMapLayers(); updateBackBtn();
       const all = [];
       (journey.legs || []).forEach(leg => {
         const pts = getLegCoords(leg);
@@ -1628,12 +1663,15 @@
     }));
 
     // Ebenen-Panel
-    document.getElementById("layerToggle").addEventListener("click", () => {
-      document.getElementById("layerPanel").classList.toggle("collapsed");
-    });
-    document.getElementById("linePanelToggle").addEventListener("click", () => {
-      document.getElementById("linePanel").classList.toggle("collapsed");
-    });
+    // Immer nur ein Panel offen, damit sie zusammen nicht die halbe Karte verdecken.
+    function togglePanel(openId, otherId) {
+      const a = document.getElementById(openId), b = document.getElementById(otherId);
+      const wasOpen = !a.classList.contains("collapsed");
+      a.classList.toggle("collapsed", wasOpen);
+      b.classList.add("collapsed");
+    }
+    document.getElementById("layerToggle").addEventListener("click", () => togglePanel("layerPanel", "linePanel"));
+    document.getElementById("linePanelToggle").addEventListener("click", () => togglePanel("linePanel", "layerPanel"));
     document.getElementById("themeBtn").addEventListener("click", () => setTheme(theme === "dark" ? "light" : "dark"));
     const chkMap = { chkLines: "lines", chkStops: "stops", chkAlerts: "alerts", chkAccess: "access" };
     Object.entries(chkMap).forEach(([id, key]) => {
@@ -1641,6 +1679,15 @@
         layerVis[key] = e.target.checked;
         applyMapLayers();
       });
+    });
+
+    document.getElementById("backBtn").addEventListener("click", resetToBrowse);
+
+    // Klick auf eine freie Stelle der Karte führt zurück zur Übersicht.
+    map.on("click", (e) => {
+      const t = e.originalEvent && e.originalEvent.target;
+      if (t && t.classList && t.classList.contains("leaflet-interactive")) return; // Linie/Haltestelle angeklickt
+      if (mapMode === "stopfocus" || mapMode === "line" || mapMode === "route") resetToBrowse();
     });
 
     let moveTimer = null;
