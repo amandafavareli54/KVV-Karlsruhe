@@ -1695,11 +1695,12 @@
 
     document.getElementById("backBtn").addEventListener("click", resetToBrowse);
 
-    // Klick auf eine freie Stelle der Karte führt zurück zur Übersicht.
+    // Klick auf eine freie Stelle der Karte klappt das Panel ein,
+    // damit die Auswahl auf der Karte gut sichtbar wird. Zum Verlassen dient „← Übersicht".
     map.on("click", (e) => {
       const t = e.originalEvent && e.originalEvent.target;
       if (t && t.classList && t.classList.contains("leaflet-interactive")) return; // Linie/Haltestelle angeklickt
-      if (mapMode === "stopfocus" || mapMode === "line" || mapMode === "route") resetToBrowse();
+      if (sheetExpanded) collapseSheet();
     });
 
     let moveTimer = null;
